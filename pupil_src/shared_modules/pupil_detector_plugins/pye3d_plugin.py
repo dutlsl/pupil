@@ -88,7 +88,10 @@ class Pye3DPlugin(PupilDetectorPlugin):
         self.__debug_window_button = None
 
         model_name = "densenet"
-        model_path = "./best_model.pkl"
+        # model_path = "./best_model.pkl"
+        current_dir = os.path.dirname(os.path.abspath(__file__))
+        pupil_src_dir = os.path.abspath(os.path.join(current_dir, "..", ".."))
+        model_path = os.path.join(pupil_src_dir, "best_model.pkl")
         device_str = "cuda" if torch.cuda.is_available() else "cpu"
 
         self.device = torch.device(device_str)
