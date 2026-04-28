@@ -41,20 +41,19 @@ from draw_ellipse import fit_ellipse
 from CheckEllipse import computeEllipseConfidence
 import cv2
 import torch
-import PIL
-from pupil_detector_plugins.utils import get_predictions
-from pupil_detector_plugins.models import model_dict
-import torchvision
 import time
 
-COLOR_MAX = 255
-COLOR_CAP = 256
-EYE_CLASS = 1
-IMAGE_MOD = 16
-BBOX_EXTRA_SPACE = 20
-CLIP_LIMIT = 1.5
-TILE_GRID_SIZE = 8
-EYE_CLASS = 1
+# ==================== U-Mamba / nnUNet ====================
+from nnunetv2.inference.predict_from_raw_data import nnUNetPredictor
+# ==========================================================
+
+# --- RITnet 전용 import (U-Mamba 교체 후 미사용) ---
+# import PIL
+# from pupil_detector_plugins.utils import get_predictions
+# from pupil_detector_plugins.models import model_dict
+# import torchvision
+
+PUPIL_CLASS_ID = 3  # OpenEDS 라벨: background=0, sclera=1, iris=2, pupil=3
 logger = logging.getLogger(__name__)
 
 
@@ -84,46 +83,32 @@ class Detector2DPlugin(PupilDetectorPlugin):
     ):
         super().__init__(g_pool=g_pool)
         self.detector_2d = detector_2d or Detector2D(properties or {})
-        """
-                기존 __init__에 model_path, device, preview 등을 인자로 추가.
-                """
-        super().__init__(g_pool=g_pool)
-        self.detector_2d = detector_2d or Detector2D(properties or {})
 
-
-        model_name = "densenet"
-        # model_path = "./best_model.pkl"
-        current_dir = os.path.dirname(os.path.abspath(__file__))
-        pupil_src_dir = os.path.abspath(os.path.join(current_dir, "..", ".."))
-        model_path = os.path.join(pupil_src_dir, "best_model.pkl")
-
+        # ==================== U-Mamba (nnUNetPredictor) 초기화 ====================
         device_str = "cuda" if torch.cuda.is_available() else "cpu"
-
         self.device = torch.device(device_str)
 
-        # 3) 모델 로드
-        #    (model_dict, get_predictions 등은 RITnet 예제에서 import 했다고 가정)
-        if model_name not in model_dict:
-            logger.error(f"Model {model_name} not found. Valid: {list(model_dict.keys())}")
-            raise ValueError("Invalid model name.")
-
-        if not os.path.exists(model_path):
-            logger.error(f"Model path {model_path} not found!")
-            raise FileNotFoundError(model_path)
-
-        self.model = model_dict[model_name]().to(self.device)
-        self.model.load_state_dict(torch.load(model_path))
-        self.model.eval()
-
-        self.transform = torchvision.transforms.Compose(
-            [
-                torchvision.transforms.ToTensor(),
-                torchvision.transforms.Normalize([0.5], [0.5]),
-            ]
+        MODEL_DIR = (
+            "/home/byeongjun/PycharmProjects/U-Mamba/data/nnUNet_results/"
+            "Dataset000_openEDS/nnUNetTrainerUMambaEnc_175ep__nnUNetPlans__2d"
         )
-        self.clahe = cv2.createCLAHE(
-            clipLimit=CLIP_LIMIT, tileGridSize=(TILE_GRID_SIZE, TILE_GRID_SIZE)
+
+        logger.info("Initializing U-Mamba (nnUNetPredictor)...")
+        self.predictor = nnUNetPredictor(
+            tile_step_size=0.5,
+            use_gaussian=True,
+            use_mirroring=False,
+            perform_everything_on_device=True,
+            device=self.device,
+            verbose=False,
+            verbose_preprocessing=False,
+            allow_tqdm=False,
         )
+        self.predictor.initialize_from_trained_model_folder(
+            MODEL_DIR, use_folds=(0,), checkpoint_name="checkpoint_best.pth"
+        )
+        logger.info("U-Mamba model loaded successfully.")
+        # ========================================================================
 
     def get_init_dict(self):
         init_dict = super().get_init_dict()
@@ -336,105 +321,78 @@ class Detector2DPlugin(PupilDetectorPlugin):
             return obj
 
     #################### Hongik IULab ###################################
-    def detect_RITnet(self, frame, **kwargs):
+    def detect_umamba(self, frame, **kwargs):
         """
-        RITnet으로 동공을 검출하고, 결과를 Pupil Labs datum 형식으로 반환하는 예시.
-        1) RITnet 세그멘테이션
-        2) 동공 라벨 -> 이진 마스크
+        U-Mamba(nnUNet)로 동공을 검출하고, 결과를 Pupil Labs datum 형식으로 반환.
+        1) nnUNetPredictor를 통한 세그멘테이션
+        2) 동공 라벨(3) -> 이진 마스크
         3) Contour + fitEllipse
         4) Pupil Labs 결과 dict(datum) 생성
         """
-
-        # ---------- 1) 기본 검사 및 그레이 변환 ----------
-        if not isinstance(frame, np.ndarray):
-            try:
-                img = self.convert_mjpeg_to_numpy(frame)
-            except ValueError as e:
-                print(f"Error converting MJPEGFrame: {e}")
-                return None
-
         start_time = time.time()
-        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+
+        # ---------- 1) 입력 준비: grayscale -> [1,1,H,W] float32 numpy ----------
+        gray = frame.gray
+        if gray is None:
+            logger.warning("frame.gray is None, skipping detection.")
+            return self._empty_datum(frame)
+
         gray = gray.astype(np.uint8)
+        input_npy = gray[np.newaxis, np.newaxis].astype(np.float32)  # [1,1,H,W]
 
-        # ---------- 2) RITnet 전처리 (감마+CLAHE+Normalize) + 추론 ----------
-        img_tensor = self.get_img(gray)  # shape=[1,H,W]
-        data = img_tensor.unsqueeze(0).to(self.device)  # shape=[1,1,H,W]
-
-        with torch.no_grad():
-            # start_time = time.time()
-            output = self.model(data)  # 예: shape=[1,4,H,W]
-            # end_time = time.time()
-            # print(1 / (end_time - start_time))
-
-
-        predict = get_predictions(output)  # shape=[1,H,W]
-        predict_2d = predict[0].cpu().numpy()  # shape=[H,W], 라벨(0..3)
+        # ---------- 2) U-Mamba 추론 (nnUNetPredictor) ----------
+        pred_mask = np.squeeze(
+            self.predictor.predict_single_npy_array(
+                input_npy,
+                {'spacing': (999, 1, 1)},
+                None,
+                None,
+                False,
+            )
+        )  # shape=[H,W], 라벨(0..3)
 
         # ---------- 3) 동공 라벨(3)만 추출 -> 이진 마스크 (0 or 255) ----------
-        pupil_mask = np.zeros_like(predict_2d, dtype=np.uint8)
-        # 만약 동공 라벨이 1이라면: pupil_mask[predict_2d == 1] = 255
-        pupil_mask[predict_2d == 3] = 255
+        pupil_mask = np.zeros_like(pred_mask, dtype=np.uint8)
+        pupil_mask[pred_mask == PUPIL_CLASS_ID] = 255
 
         # ---------- 4) findContours + fitEllipse ----------
         contours, _ = cv2.findContours(
             pupil_mask, cv2.RETR_LIST, cv2.CHAIN_APPROX_NONE
         )
+
         end_time = time.time()
-        print(1/(end_time - start_time))
+        elapsed = end_time - start_time
+        if elapsed > 0:
+            logger.debug(f"U-Mamba inference FPS: {1.0 / elapsed:.1f}")
 
         if not contours:
-            # 동공 미검출 -> Pupil Labs 표준 dict
-            result = {
-                "location": (0.0, 0.0),
-                "diameter": 0.0,
-                "confidence": 0.0,
-                "ellipse": {
-                    "axes": (0.0, 0.0),
-                    "angle": 0.0,
-                    "center": (0.0, 0.0),
-                },
-            }
-        else:
-            # 가장 큰 컨투어 선택
-            best_contour = max(contours, key=cv2.contourArea)
-            if len(best_contour) < 5:
-                # fitEllipse는 최소 5개 점 필요
-                result = {
-                    "location": (0.0, 0.0),
-                    "diameter": 0.0,
-                    "confidence": 0.0,
-                    "ellipse": {
-                        "axes": (0.0, 0.0),
-                        "angle": 0.0,
-                        "center": (0.0, 0.0),
-                    },
-                }
-            else:
-                ellipse = cv2.fitEllipse(best_contour)  # ((cx, cy),(MA, ma), angleDeg)
-                (cx, cy), (MA, ma), angle_deg = ellipse
+            return self._empty_datum(frame)
 
-                # 간단히 confidence=1.0, 필요시 support ratio 계산 가능
-                conf_val = 1.0
+        # 가장 큰 컨투어 선택
+        best_contour = max(contours, key=cv2.contourArea)
+        if len(best_contour) < 5:
+            return self._empty_datum(frame)
 
-                result = {
-                    "location": (float(cx), float(cy)),
-                    "diameter": float(MA),  # 장축을 diameter로
-                    "confidence": conf_val,
-                    "ellipse": {
-                        "axes": (float(MA), float(ma)),
-                        "angle": float(angle_deg),
-                        "center": (float(cx), float(cy)),
-                    },
-                }
+        ellipse = cv2.fitEllipse(best_contour)  # ((cx, cy),(MA, ma), angleDeg)
+        (cx, cy), (MA, ma), angle_deg = ellipse
+        conf_val = 1.0
+
+        result = {
+            "location": (float(cx), float(cy)),
+            "diameter": float(MA),
+            "confidence": conf_val,
+            "ellipse": {
+                "axes": (float(MA), float(ma)),
+                "angle": float(angle_deg),
+                "center": (float(cx), float(cy)),
+            },
+        }
 
         # ---------- 5) Pupil Labs 최종 datum 생성 ----------
-        # location -> (px,py), normalize => (x',y') in [0..1]
         norm_pos = normalize(
             result["location"], (frame.width, frame.height), flip_y=True
         )
 
-        # create_pupil_datum(...) => Pupil Labs 'datum' 형식
         datum = self.create_pupil_datum(
             norm_pos=norm_pos,
             diameter=result["diameter"],
@@ -442,12 +400,27 @@ class Detector2DPlugin(PupilDetectorPlugin):
             timestamp=frame.timestamp,
         )
 
-        # ellipse 정보 채워넣기
         datum["ellipse"] = {}
         datum["ellipse"]["axes"] = result["ellipse"]["axes"]
         datum["ellipse"]["angle"] = result["ellipse"]["angle"]
         datum["ellipse"]["center"] = result["ellipse"]["center"]
 
+        return datum
+
+    def _empty_datum(self, frame):
+        """동공 미검출 시 기본 datum 반환."""
+        norm_pos = (0.0, 0.0)
+        datum = self.create_pupil_datum(
+            norm_pos=norm_pos,
+            diameter=0.0,
+            confidence=0.0,
+            timestamp=frame.timestamp,
+        )
+        datum["ellipse"] = {
+            "axes": (0.0, 0.0),
+            "angle": 0.0,
+            "center": (0.0, 0.0),
+        }
         return datum
     #################################################################
 
