@@ -54,6 +54,7 @@ from nnunetv2.inference.predict_from_raw_data import nnUNetPredictor
 # import torchvision
 
 PUPIL_CLASS_ID = 3  # OpenEDS 라벨: background=0, sclera=1, iris=2, pupil=3
+from pupil_detector_plugins.comparison_visualizer import ComparisonVisualizer
 logger = logging.getLogger(__name__)
 
 
@@ -108,6 +109,8 @@ class Detector2DPlugin(PupilDetectorPlugin):
             MODEL_DIR, use_folds=(0,), checkpoint_name="checkpoint_best.pth"
         )
         logger.info("U-Mamba model loaded successfully.")
+        self.comparator = ComparisonVisualizer(device=self.device)
+        self.show_comparison = True
         # ========================================================================
 
     def get_init_dict(self):
@@ -338,7 +341,12 @@ class Detector2DPlugin(PupilDetectorPlugin):
             return self._empty_datum(frame)
 
         gray = gray.astype(np.uint8)
-        input_npy = gray[np.newaxis, np.newaxis].astype(np.float32)  # [1,1,H,W]
+        orig_h, orig_w = gray.shape[:2]
+
+        # 학습 해상도(400x640)로 리사이즈하여 모델에 입력
+        TRAIN_H, TRAIN_W = 400, 640
+        gray_resized = cv2.resize(gray, (TRAIN_W, TRAIN_H), interpolation=cv2.INTER_LINEAR)
+        input_npy = gray_resized[np.newaxis, np.newaxis].astype(np.float32)  # [1,1,400,640]
 
         # ---------- 2) U-Mamba 추론 (nnUNetPredictor) ----------
         pred_mask = np.squeeze(
@@ -349,7 +357,14 @@ class Detector2DPlugin(PupilDetectorPlugin):
                 None,
                 False,
             )
-        )  # shape=[H,W], 라벨(0..3)
+        )  # shape=[400,640], 라벨(0..3)
+
+        # 원래 카메라 해상도로 되돌리기
+        pred_mask = cv2.resize(pred_mask.astype(np.uint8), (orig_w, orig_h), interpolation=cv2.INTER_NEAREST)
+        if getattr(self, 'show_comparison', True):
+            self.comparator.compare(gray, pred_mask)  # 비교 시각화
+        else:
+            self.comparator.cleanup()
 
         # ---------- 3) 동공 라벨(3)만 추출 -> 이진 마스크 (0 or 255) ----------
         pupil_mask = np.zeros_like(pred_mask, dtype=np.uint8)
@@ -476,6 +491,7 @@ class Detector2DPlugin(PupilDetectorPlugin):
             + "Adjust the pupil min and pupil max ranges (red circles) so that the detected pupil size (green circle) is within the bounds."
         )
         self.menu.append(info)
+        self.menu.append(ui.Switch("show_comparison", self, label="Show RITnet vs U-Mamba"))
         self.menu.append(
             ui.Slider(
                 "intensity_range",
@@ -512,6 +528,7 @@ class Detector2DPlugin(PupilDetectorPlugin):
             "detection. The default value is 160."
         )
         self.menu.append(info)
+        self.menu.append(ui.Switch("show_comparison", self, label="Show RITnet vs U-Mamba"))
         self.menu.append(
             ui.Slider(
                 "canny_treshold",

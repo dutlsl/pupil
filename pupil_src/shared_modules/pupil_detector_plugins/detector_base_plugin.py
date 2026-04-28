@@ -133,12 +133,22 @@ class PupilDetectorPlugin(Plugin):
         # )
 
         ############# Hongik IULab #############################
-        detection_result = self.detect_umamba(
+        if hasattr(self, "detect_umamba"):
+            detection_result = self.detect_umamba(
+                frame=frame,
+                previous_detection_results=previous_detection_results,
+            )
+        else:
+            detection_result = self.detect(
+                frame=frame,
+                previous_detection_results=previous_detection_results,
+            )
 
-            frame=frame,
-            # TODO: workaround to get 2D data into pye3D for now
-            previous_detection_results=previous_detection_results,
-        )
+
+
+
+
+
         #########################################################
 
         # Append the new detection result to the previous results

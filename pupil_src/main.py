@@ -1,3 +1,9 @@
+import torch as _torch
+_orig_load = _torch.load
+def _patched_load(*a, **kw):
+    kw.setdefault("weights_only", False)
+    return _orig_load(*a, **kw)
+_torch.load = _patched_load
 import os
 os.environ["OMP_NUM_THREADS"] = "4"
 os.environ["MKL_NUM_THREADS"] = "4"
