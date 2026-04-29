@@ -1,6 +1,6 @@
 # Pupil Labs U-Mamba: 실무자를 위한 코드 딥다이브 가이드 (Code Walkthrough)
 
-이 문서는 **실제 코드를 유지보수하고 수정해야 하는 개발자를 위한 코드 레벨 해설서** 입니다.
+이 문서는 실제 코드를 유지보수하고 수정해야 하는 개발자를 위한 코드 레벨 해설서 입니다.
 
 동공을 추적하는 과정에서 프레임 1장이 시스템 내부에서 어떻게 흘러가고, 우리가 짠 U-Mamba 코드가 언제 어떻게 호출되는지 아주 구체적으로 파헤칩니다.
 
@@ -17,20 +17,20 @@
 
 ## 1. 전체 파이프라인: 카메라 프레임의 일생
 
-Pupil Capture 프로그램을 켜면 내부적으로 여러 개의 **프로세스(Process)** 가 돌아갑니다.
+Pupil Capture 프로그램을 켜면 내부적으로 여러 개의 프로세스(Process) 가 돌아갑니다.
 
-1. **`main.py`**: 제일 먼저 실행되는 대장입니다. 여기서 `weights_only=False` 몽키패치를 적용한 뒤, ** World Process **(풍경 카메라)와 ** Eye Process**(눈 카메라)를 각각 독립된 프로세스로 띄웁니다.
-2. **카메라 캡처**: Eye Process가 카메라 하드웨어로부터 1초에 수십 장씩 눈 사진(`frame`)을 찍어냅니다.
-3. **이벤트 브로드캐스팅**: 사진이 찍힐 때마다 Eye Process 내부의 모든 플러그인들에게 "새 프레임 도착했어!"라고 알림(`recent_events`)을 보냅니다.
-4. **2D 동공 검출 (U-Mamba)**: 알림을 받은 `detector_2d_plugin.py`가 사진을 가로채서 U-Mamba 모델에 집어넣고, 타원을 그려서 2D 좌표(`datum`)를 만들어냅니다.
-5. **3D 안구 추적 (Pye3D)**: 알림을 받은 `pye3d_plugin.py`가 조금 늦게 일어나서, 아까 만들어둔 2D 좌표를 가져다가 3D 안구 모델을 업데이트합니다.
+1. `main.py`: 제일 먼저 실행되는 대장입니다. 여기서 `weights_only=False` 몽키패치를 적용한 뒤,  World Process (풍경 카메라)와  Eye Process(눈 카메라)를 각각 독립된 프로세스로 띄웁니다.
+2. 카메라 캡처: Eye Process가 카메라 하드웨어로부터 1초에 수십 장씩 눈 사진(`frame`)을 찍어냅니다.
+3. 이벤트 브로드캐스팅: 사진이 찍힐 때마다 Eye Process 내부의 모든 플러그인들에게 "새 프레임 도착했어!"라고 알림(`recent_events`)을 보냅니다.
+4. 2D 동공 검출 (U-Mamba): 알림을 받은 `detector_2d_plugin.py`가 사진을 가로채서 U-Mamba 모델에 집어넣고, 타원을 그려서 2D 좌표(`datum`)를 만들어냅니다.
+5. 3D 안구 추적 (Pye3D): 알림을 받은 `pye3d_plugin.py`가 조금 늦게 일어나서, 아까 만들어둔 2D 좌표를 가져다가 3D 안구 모델을 업데이트합니다.
 
 ---
 
 ## 2. 이벤트 트리거: `detector_base_plugin.py`
 
-이 파일은 모든 검출기 플러그인의 **'부모(Base)'** 역할을 합니다. 
-가장 중요한 메서드는 바로 **`recent_events(self, event)`** 입니다.
+이 파일은 모든 검출기 플러그인의 '부모(Base)' 역할을 합니다. 
+가장 중요한 메서드는 바로 `recent_events(self, event)` 입니다.
 
 ```python
 # pupil_src/shared_modules/pupil_detector_plugins/detector_base_plugin.py
@@ -59,7 +59,7 @@ def recent_events(self, event):
     event[EVENT_KEY] = previous_detection_results + [detection_result]
 ```
 
-> **왜 이렇게 분기했나요?**
+> 왜 이렇게 분기했나요?
 > 모든 플러그인(`Pye3D` 포함)은 이 부모 클래스를 상속받습니다. 만약 무식하게 `self.detect_umamba()`를 강제로 호출해버리면, `detect_umamba` 함수가 없는 `Pye3D` 플러그인 차례에서 `AttributeError`가 나며 프로그램이 뻗어버립니다. 그래서 `hasattr`(함수가 존재하는가?)로 안전하게 분기한 것입니다.
 
 ---
@@ -69,7 +69,7 @@ def recent_events(self, event):
 프레임이 `detect_umamba(self, frame)` 함수로 넘어오면, 비로소 진짜 딥러닝 연산이 시작됩니다. 실무에서 가장 많이 들여다봐야 할 곳입니다.
 
 ### 1단계: 해상도 맞추기 (가장 흔한 에러 발생 지점)
-카메라에서 들어오는 원본 사진(`frame.gray`)은 192x192 같은 작은 정사각형일 수 있습니다. 하지만 **U-Mamba는 무조건 400x640 크기의 사진만 먹도록 학습되었습니다.**
+카메라에서 들어오는 원본 사진(`frame.gray`)은 192x192 같은 작은 정사각형일 수 있습니다. 하지만 U-Mamba는 무조건 400x640 크기의 사진만 먹도록 학습되었습니다.
 ```python
 # 1. 400x640으로 강제 리사이즈 (찌그러지더라도 해야 함)
 resized_img = cv2.resize(frame.gray, (640, 400), interpolation=cv2.INTER_LINEAR)
@@ -98,7 +98,7 @@ pupil_mask[prediction_2d == 3] = 255
 orig_h, orig_w = frame.gray.shape
 restored_mask = cv2.resize(pupil_mask, (orig_w, orig_h), interpolation=cv2.INTER_NEAREST)
 ```
-> **왜 되돌려야 하나요?**
+> 왜 되돌려야 하나요?
 > 나중에 화면에 초록색 타원을 그릴 때, 원본 카메라 화면 크기에 맞춰서 그려야 하기 때문입니다.
 
 ### 4단계: 타원 피팅 (OpenCV)
@@ -118,7 +118,7 @@ contours, _ = cv2.findContours(restored_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPRO
 
 ## 4. 데이터의 표준 규격: `datum` 이란?
 
-Pupil Labs 시스템 전체에서 공용으로 쓰는 **"동공 발견 보고서"** 양식입니다. 파이썬 딕셔너리(`dict`) 형태이며, 다음과 같이 생겼습니다.
+Pupil Labs 시스템 전체에서 공용으로 쓰는 "동공 발견 보고서" 양식입니다. 파이썬 딕셔너리(`dict`) 형태이며, 다음과 같이 생겼습니다.
 
 ```json
 {
@@ -136,7 +136,7 @@ Pupil Labs 시스템 전체에서 공용으로 쓰는 **"동공 발견 보고서
     }
 }
 ```
-**주의사항**: U-Mamba를 썼더라도 `method` 값을 `"umamba"`로 바꾸면 안 됩니다. 하류 파이프라인(Pye3D)이 `"2d c++"`라는 글자만 찾도록 하드코딩되어 있기 때문입니다.
+주의사항: U-Mamba를 썼더라도 `method` 값을 `"umamba"`로 바꾸면 안 됩니다. 하류 파이프라인(Pye3D)이 `"2d c++"`라는 글자만 찾도록 하드코딩되어 있기 때문입니다.
 
 ---
 
@@ -152,8 +152,8 @@ Pupil Labs 시스템 전체에서 공용으로 쓰는 **"동공 발견 보고서
 U-Mamba 모델 자체를 192x192 이미지로 새로 재학습(Fine-tuning)시키지 않는 이상 해상도 리사이즈를 빼면 안 됩니다. 만약 모델을 새로 학습했다면, `detector_2d_plugin.py`에서 `cv2.resize` 로직을 지우고 `frame.gray`를 그대로 텐서로 만들면 됩니다.
 
 ### Q3. U-Mamba가 너무 느려서 화면이 버벅인다면?
-현재 GPU(CUDA)를 쓰고 있는지 환경 점검이 1순위입니다. 만약 GPU 리소스가 꽉 찼다면, `detector_2d_plugin.py`의 UI 토글 스위치 설정에서 **"Show RITnet vs U-Mamba"** 기능이 켜져있는지 확인하세요. 이 기능이 켜져 있으면 구형 RITnet과 U-Mamba를 동시에 돌리느라 속도가 반토막이 납니다.
+현재 GPU(CUDA)를 쓰고 있는지 환경 점검이 1순위입니다. 만약 GPU 리소스가 꽉 찼다면, `detector_2d_plugin.py`의 UI 토글 스위치 설정에서 "Show RITnet vs U-Mamba" 기능이 켜져있는지 확인하세요. 이 기능이 켜져 있으면 구형 RITnet과 U-Mamba를 동시에 돌리느라 속도가 반토막이 납니다.
 
 ---
-**[작성자 요약]**
-가장 핵심은 **"원본 프레임 -> 400x640 리사이즈 -> 마스크 생성 -> 다시 원본 크기로 복원 -> 타원 추출"** 이라는 모래시계 ⏳ 형태의 흐름을 이해하는 것입니다. 이 흐름만 꿰고 있으면 어디서 에러가 나더라도 `cv2.imshow`를 띄워가며 쉽게 디버깅할 수 있습니다.
+[작성자 요약]
+가장 핵심은 "원본 프레임 -> 400x640 리사이즈 -> 마스크 생성 -> 다시 원본 크기로 복원 -> 타원 추출" 이라는 모래시계 ⏳ 형태의 흐름을 이해하는 것입니다. 이 흐름만 꿰고 있으면 어디서 에러가 나더라도 `cv2.imshow`를 띄워가며 쉽게 디버깅할 수 있습니다.
