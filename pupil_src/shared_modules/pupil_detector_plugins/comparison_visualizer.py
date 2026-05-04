@@ -1,18 +1,18 @@
 """
 comparison_visualizer.py
 ========================
-RITnet vs U-Mamba 실시간 비교 시각화 모듈.
+RITnet vs TransUNet 실시간 비교 시각화 모듈.
 
 메인 detect 로직에 간섭하지 않는 독립 모듈.
 Detector2DPlugin.__init__에서 이 모듈을 초기화하고,
-detect_umamba에서 한 줄(compare())만 호출하면 됨.
+detect_transunet에서 한 줄(compare())만 호출하면 됨.
 
 사용법 (detector_2d_plugin.py):
     # __init__ 끝에:
     from pupil_detector_plugins.comparison_visualizer import ComparisonVisualizer
     self.comparator = ComparisonVisualizer(device=self.device)
 
-    # detect_umamba 안에서, pred_mask 구한 직후:
+    # detect_transunet 안에서, pred_mask 구한 직후:
     self.comparator.compare(gray, pred_mask)
 """
 
@@ -42,13 +42,13 @@ COLOR_SCLERA = (200, 180, 100)   # 연한 하늘색
 COLOR_IRIS   = (0,   200, 0)     # 초록
 COLOR_PUPIL  = (0,   0,   255)   # 빨강
 COLOR_ELLIPSE_RITNET = (0, 255, 255)  # 노랑
-COLOR_ELLIPSE_UMAMBA = (0, 255, 0)    # 초록
+COLOR_ELLIPSE_TRANSUNET = (0, 255, 0)    # 초록
 
 
 class ComparisonVisualizer:
-    """RITnet 모델을 자체 로드하여, 매 프레임 U-Mamba 결과와 나란히 비교."""
+    """RITnet 모델을 자체 로드하여, 매 프레임 TransUNet 결과와 나란히 비교."""
 
-    def __init__(self, device=None, window_name="RITnet vs U-Mamba"):
+    def __init__(self, device=None, window_name="RITnet vs TransUNet"):
         self.device = device or torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.window_name = window_name
         self._window_created = False
@@ -78,17 +78,17 @@ class ComparisonVisualizer:
         self.clahe = cv2.createCLAHE(clipLimit=CLIP_LIMIT, tileGridSize=(TILE_GRID_SIZE, TILE_GRID_SIZE))
 
     # ──────────────────── 공개 API ────────────────────
-    def compare(self, gray: np.ndarray, umamba_mask: np.ndarray):
+    def compare(self, gray: np.ndarray, transunet_mask: np.ndarray):
         """
         매 프레임 호출. 메인 로직에 영향 없음.
 
         Args:
             gray:        원본 그레이스케일 (H, W), uint8
-            umamba_mask: U-Mamba 예측 라벨 맵 (H, W), 0~3
+            transunet_mask: TransUNet 예측 라벨 맵 (H, W), 0~3
         """
         try:
             ritnet_mask = self._run_ritnet(gray)
-            vis = self._build_comparison(gray, ritnet_mask, umamba_mask)
+            vis = self._build_comparison(gray, ritnet_mask, transunet_mask)
             if not self._window_created:
                 cv2.namedWindow(self.window_name, cv2.WINDOW_NORMAL)
                 self._window_created = True
@@ -142,8 +142,8 @@ class ComparisonVisualizer:
         overlay[mask == 3] = COLOR_PUPIL
         return cv2.addWeighted(bgr, 0.5, overlay, 0.5, 0)
 
-    def _build_comparison(self, gray: np.ndarray, ritnet_mask: np.ndarray, umamba_mask: np.ndarray) -> np.ndarray:
-        """좌: RITnet, 우: U-Mamba 나란히 비교 이미지 생성."""
+    def _build_comparison(self, gray: np.ndarray, ritnet_mask: np.ndarray, transunet_mask: np.ndarray) -> np.ndarray:
+        """좌: RITnet, 우: TransUNet 나란히 비교 이미지 생성."""
         h, w = gray.shape[:2]
         bgr = cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR)
 
@@ -155,17 +155,17 @@ class ComparisonVisualizer:
             cx, cy = int(ell_r[0][0]), int(ell_r[0][1])
             cv2.circle(left, (cx, cy), 3, COLOR_ELLIPSE_RITNET, -1)
 
-        # --- 우측: U-Mamba ---
-        right = self._overlay_mask(bgr.copy(), umamba_mask)
-        ell_u = self._fit_ellipse(umamba_mask)
+        # --- 우측: TransUNet ---
+        right = self._overlay_mask(bgr.copy(), transunet_mask)
+        ell_u = self._fit_ellipse(transunet_mask)
         if ell_u is not None:
-            cv2.ellipse(right, ell_u, COLOR_ELLIPSE_UMAMBA, 2)
+            cv2.ellipse(right, ell_u, COLOR_ELLIPSE_TRANSUNET, 2)
             cx, cy = int(ell_u[0][0]), int(ell_u[0][1])
-            cv2.circle(right, (cx, cy), 3, COLOR_ELLIPSE_UMAMBA, -1)
+            cv2.circle(right, (cx, cy), 3, COLOR_ELLIPSE_TRANSUNET, -1)
 
         # --- 라벨 ---
         cv2.putText(left, "RITnet", (10, 25), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
-        cv2.putText(right, "U-Mamba", (10, 25), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
+        cv2.putText(right, "TransUNet", (10, 25), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
 
         # --- 범례 (하단) ---
         legend_h = 25

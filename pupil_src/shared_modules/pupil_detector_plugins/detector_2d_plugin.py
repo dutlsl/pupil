@@ -43,8 +43,6 @@ import cv2
 import torch
 import time
 
-# ==================== U-Mamba / nnUNet ====================
-from nnunetv2.inference.predict_from_raw_data import nnUNetPredictor
 # ==========================================================
 
 # --- RITnet 전용 import (U-Mamba 교체 후 미사용) ---
@@ -85,35 +83,41 @@ class Detector2DPlugin(PupilDetectorPlugin):
         super().__init__(g_pool=g_pool)
         self.detector_2d = detector_2d or Detector2D(properties or {})
 
-        # ==================== U-Mamba (nnUNetPredictor) 초기화 ====================
+        # ==================== TransUNet 초기화 ====================
+        import sys
+        import os
+        TRANSUNET_DIR = os.path.expanduser("~/PycharmProjects/transUnet")
+        if TRANSUNET_DIR not in sys.path:
+            sys.path.insert(0, TRANSUNET_DIR)
+            
+        from networks.vit_seg_modeling import VisionTransformer as ViT_seg
+        from networks.vit_seg_modeling import CONFIGS as CONFIGS_ViT_seg
+
         device_str = "cuda" if torch.cuda.is_available() else "cpu"
         self.device = torch.device(device_str)
 
-        MODEL_DIR = (
-            "/home/byeongjun/PycharmProjects/U-Mamba/data/nnUNet_results/"
-            "Dataset000_openEDS/nnUNetTrainerUMambaEnc_175ep__nnUNetPlans__2d"
-        )
+        logger.info("Initializing TransUNet...")
+        cfg = CONFIGS_ViT_seg['R50-ViT-B_16']
+        cfg.n_classes = 4
+        cfg.n_skip = 3
+        patch = int(cfg.patches.size[0]) if isinstance(cfg.patches.size, tuple) else int(cfg.patches.size)
+        cfg.patches.grid = (224 // patch, 224 // patch)
 
-        logger.info("Initializing U-Mamba (nnUNetPredictor)...")
-        self.predictor = nnUNetPredictor(
-            tile_step_size=0.5,
-            use_gaussian=True,
-            use_mirroring=False,
-            perform_everything_on_device=True,
-            device=self.device,
-            verbose=False,
-            verbose_preprocessing=False,
-            allow_tqdm=False,
-        )
-        self.predictor.initialize_from_trained_model_folder(
-            MODEL_DIR, use_folds=(0,), checkpoint_name="checkpoint_best.pth"
-        )
-        logger.info("U-Mamba model loaded successfully.")
+        self.transunet_model = ViT_seg(cfg, img_size=224, num_classes=cfg.n_classes).to(self.device)
+        ckpt_path = os.path.join(TRANSUNET_DIR, "models_transunet", "best_model.pth")
+        
+        # Load weights
+        sd = torch.load(ckpt_path, map_location=self.device)
+        state = sd if (isinstance(sd, dict) and 'state_dict' not in sd) else sd.get('model', sd)
+        self.transunet_model.load_state_dict(state, strict=False)
+        self.transunet_model.eval()
+        
+        logger.info("TransUNet model loaded successfully.")
         self.comparator = ComparisonVisualizer(device=self.device)
         self.show_comparison = False
         self.flip_vertically = False
         self.flip_horizontally = False
-        self.active_model = "U-Mamba"
+        self.active_model = "TransUNet"
         # ========================================================================
 
     def get_init_dict(self):
@@ -122,9 +126,9 @@ class Detector2DPlugin(PupilDetectorPlugin):
         return init_dict
 
     def detect(self, frame, **kwargs):
-        active = getattr(self, "active_model", "U-Mamba")
-        if active == "U-Mamba":
-            return self._detect_umamba(frame, **kwargs)
+        active = getattr(self, "active_model", "TransUNet")
+        if active == "TransUNet":
+            return self._detect_transunet(frame, **kwargs)
         elif active == "RITnet":
             return self._detect_ritnet(frame, **kwargs)
             
@@ -327,8 +331,8 @@ class Detector2DPlugin(PupilDetectorPlugin):
         else:
             return obj
 
-    #################### Hongik IULab ###################################
-    def _detect_umamba(self, frame, **kwargs):
+    #################### TransUNet ###################################
+    def _detect_transunet(self, frame, **kwargs):
         start_time = time.time()
         gray = frame.gray
         if gray is None:
@@ -352,31 +356,21 @@ class Detector2DPlugin(PupilDetectorPlugin):
         clahe = cv2.createCLAHE(clipLimit=1.5, tileGridSize=(8, 8))
         gray = clahe.apply(gray)
 
-        # Letterbox Resizing to 640x400
-        TRAIN_H, TRAIN_W = 400, 640
-        scale = min(TRAIN_W / orig_w, TRAIN_H / orig_h)
-        new_w, new_h = int(orig_w * scale), int(orig_h * scale)
-        resized = cv2.resize(gray, (new_w, new_h), interpolation=cv2.INTER_LINEAR)
-        canvas = np.zeros((TRAIN_H, TRAIN_W), dtype=np.uint8)
-        y_off = (TRAIN_H - new_h) // 2
-        x_off = (TRAIN_W - new_w) // 2
-        canvas[y_off:y_off+new_h, x_off:x_off+new_w] = resized
+        # TransUNet expects RGB 224x224 and scale 0~1
+        gray_rgb = cv2.cvtColor(gray, cv2.COLOR_GRAY2RGB).astype(np.float32) / 255.0
+        gray_res = cv2.resize(gray_rgb, (224, 224), interpolation=cv2.INTER_LINEAR)
+        img_chw = np.transpose(gray_res, (2, 0, 1))  # 3xHxW
+        
+        input_tensor = torch.from_numpy(img_chw).unsqueeze(0).to(self.device)
 
-        input_npy = canvas[np.newaxis, np.newaxis].astype(np.float32)
-
-        pred_mask = np.squeeze(
-            self.predictor.predict_single_npy_array(
-                input_npy,
-                {'spacing': (999, 1, 1)},
-                None,
-                None,
-                False,
-            )
-        )
-
-        # Crop letterbox back to original aspect
-        pred_mask_cropped = pred_mask[y_off:y_off+new_h, x_off:x_off+new_w]
-        pred_mask = cv2.resize(pred_mask_cropped.astype(np.uint8), (orig_w, orig_h), interpolation=cv2.INTER_NEAREST)
+        with torch.no_grad():
+            logits = self.transunet_model(input_tensor)
+            if isinstance(logits, list):
+                logits = logits[-1]
+            pred = logits.argmax(1) # (1, H, W)
+            
+        pred_mask_224 = pred[0].detach().cpu().numpy().astype(np.uint8)
+        pred_mask = cv2.resize(pred_mask_224, (orig_w, orig_h), interpolation=cv2.INTER_NEAREST)
         
         if getattr(self, 'show_comparison', False):
             self.comparator.compare(gray, pred_mask)
@@ -390,7 +384,7 @@ class Detector2DPlugin(PupilDetectorPlugin):
 
         elapsed = time.time() - start_time
         if elapsed > 0:
-            logger.debug(f"U-Mamba inference FPS: {1.0 / elapsed:.1f}")
+            logger.debug(f"TransUNet inference FPS: {1.0 / elapsed:.1f}")
 
         if not contours:
             return self._empty_datum(frame)
@@ -452,9 +446,9 @@ class Detector2DPlugin(PupilDetectorPlugin):
         pred_mask = self.comparator._run_ritnet(gray)
 
         if getattr(self, 'show_comparison', False):
-            # Pass zero mask for UMamba so comparison shows RITnet only
-            empty_umamba = np.zeros_like(pred_mask)
-            self.comparator.compare(gray, empty_umamba)
+            # Pass zero mask for TransUNet so comparison shows RITnet only
+            empty_transunet = np.zeros_like(pred_mask)
+            self.comparator.compare(gray, empty_transunet)
         else:
             self.comparator.cleanup()
 
@@ -575,10 +569,10 @@ class Detector2DPlugin(PupilDetectorPlugin):
             + "Adjust the pupil min and pupil max ranges (red circles) so that the detected pupil size (green circle) is within the bounds."
         )
         self.menu.append(info)
-        self.menu.append(ui.Selector("active_model", self, label="Active Model", selection=["U-Mamba", "RITnet", "2D C++"]))
+        self.menu.append(ui.Selector("active_model", self, label="Active Model", selection=["TransUNet", "RITnet", "2D C++"]))
         self.menu.append(ui.Switch("flip_vertically", self, label="Flip Vertically (Eye 0)"))
         self.menu.append(ui.Switch("flip_horizontally", self, label="Flip Horizontally (Eye 0)"))
-        self.menu.append(ui.Switch("show_comparison", self, label="Show RITnet vs U-Mamba"))
+        self.menu.append(ui.Switch("show_comparison", self, label="Show RITnet vs TransUNet"))
         self.menu.append(
             ui.Slider(
                 "intensity_range",
