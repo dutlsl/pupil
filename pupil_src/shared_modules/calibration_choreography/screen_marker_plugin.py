@@ -71,13 +71,15 @@ class ScreenMarkerChoreographyPlugin(
     @staticmethod
     def get_list_of_markers_to_show(mode: ChoreographyMode) -> list:
         if ChoreographyMode.CALIBRATION == mode:
-            return [(0.5, 0.5), (0.0, 1.0), (1.0, 1.0), (1.0, 0.0), (0.0, 0.0)]
+            # return [(0.5, 0.5), (0.0, 1.0), (1.0, 1.0), (1.0, 0.0), (0.0, 0.0)]
             # return [(0.5, 0.5), (0.5, 1.0), (1.0, 0.5), (0.5, 0.0), (0.0, 0.5)]
+            return [(0.4, 0.6), (0.6, 0.6), (0.6, 0.4), (0.4, 0.4)]
         if ChoreographyMode.VALIDATION == mode:
             # return [(0.5, 1.0), (1.0, 0.5), (0.5, 0.0), (0.0, 0.5)]
-            #return [(0.5, 0.8), (0.8, 0.5), (0.5, 0.2), (0.2, 0.5), (0.5, 0.5)]
+            # return [(0.5, 0.8), (0.8, 0.5), (0.5, 0.2), (0.2, 0.5), (0.5, 0.5)]
             # return [(0.2, 0.8), (0.8, 0.8), (0.8, 0.2), (0.2, 0.2)]
-            return [(0.0, 1.0), (1.0, 1.0), (1.0, 0.0), (0.0, 0.0)]
+            return [(0.4, 0.6), (0.6, 0.6), (0.6, 0.4), (0.4, 0.4)]
+            # return [(0.0, 1.0), (1.0, 1.0), (1.0, 0.0), (0.0, 0.0)]
         raise ValueError(f"Unknown mode {mode}")
 
     def __init__(
@@ -144,7 +146,7 @@ class ScreenMarkerChoreographyPlugin(
         )
 
         self.__ui_slider_sample_duration = ui.Slider(
-            "sample_duration", self, label="Sample duration", min=10, max=100, step=1
+            "sample_duration", self, label="Sample duration", min=10, max=1000, step=1
         )
 
         return [

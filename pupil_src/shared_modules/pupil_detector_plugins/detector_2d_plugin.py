@@ -110,7 +110,10 @@ class Detector2DPlugin(PupilDetectorPlugin):
         )
         logger.info("U-Mamba model loaded successfully.")
         self.comparator = ComparisonVisualizer(device=self.device)
-        self.show_comparison = True
+        self.show_comparison = False
+        self.flip_vertically = False
+        self.flip_horizontally = False
+        self.active_model = "U-Mamba"
         # ========================================================================
 
     def get_init_dict(self):
@@ -119,18 +122,21 @@ class Detector2DPlugin(PupilDetectorPlugin):
         return init_dict
 
     def detect(self, frame, **kwargs):
+        active = getattr(self, "active_model", "U-Mamba")
+        if active == "U-Mamba":
+            return self._detect_umamba(frame, **kwargs)
+        elif active == "RITnet":
+            return self._detect_ritnet(frame, **kwargs)
+            
         # convert roi-plugin to detector roi
         roi = Roi(*self.g_pool.roi.bounds)
-
         debug_img = frame.bgr if self.g_pool.display_mode == "algorithm" else None
 
-        # start = time.time()
         result = self.detector_2d.detect(
             gray_img=frame.gray,
             color_img=debug_img,
             roi=roi,
         )
-
 
         norm_pos = normalize(
             result["location"], (frame.width, frame.height), flip_y=True
@@ -149,8 +155,6 @@ class Detector2DPlugin(PupilDetectorPlugin):
         datum["ellipse"]["axes"] = result["ellipse"]["axes"]
         datum["ellipse"]["angle"] = result["ellipse"]["angle"]
         datum["ellipse"]["center"] = result["ellipse"]["center"]
-        # end = time.time()
-        # print(end - start)
 
         return datum
 
@@ -324,17 +328,8 @@ class Detector2DPlugin(PupilDetectorPlugin):
             return obj
 
     #################### Hongik IULab ###################################
-    def detect_umamba(self, frame, **kwargs):
-        """
-        U-Mamba(nnUNet)로 동공을 검출하고, 결과를 Pupil Labs datum 형식으로 반환.
-        1) nnUNetPredictor를 통한 세그멘테이션
-        2) 동공 라벨(3) -> 이진 마스크
-        3) Contour + fitEllipse
-        4) Pupil Labs 결과 dict(datum) 생성
-        """
+    def _detect_umamba(self, frame, **kwargs):
         start_time = time.time()
-
-        # ---------- 1) 입력 준비: grayscale -> [1,1,H,W] float32 numpy ----------
         gray = frame.gray
         if gray is None:
             logger.warning("frame.gray is None, skipping detection.")
@@ -343,12 +338,32 @@ class Detector2DPlugin(PupilDetectorPlugin):
         gray = gray.astype(np.uint8)
         orig_h, orig_w = gray.shape[:2]
 
-        # 학습 해상도(400x640)로 리사이즈하여 모델에 입력
-        TRAIN_H, TRAIN_W = 400, 640
-        gray_resized = cv2.resize(gray, (TRAIN_W, TRAIN_H), interpolation=cv2.INTER_LINEAR)
-        input_npy = gray_resized[np.newaxis, np.newaxis].astype(np.float32)  # [1,1,400,640]
+        flip_v = getattr(self, "flip_vertically", False)
+        if flip_v:
+            gray = cv2.flip(gray, 0)
+            
+        flip_h = getattr(self, "flip_horizontally", False)
+        if flip_h:
+            gray = cv2.flip(gray, 1)
 
-        # ---------- 2) U-Mamba 추론 (nnUNetPredictor) ----------
+        # CLAHE (like RITnet)
+        table = 255.0 * (np.linspace(0, 1, 256) ** 0.8)
+        gray = cv2.LUT(gray, table.astype(np.uint8))
+        clahe = cv2.createCLAHE(clipLimit=1.5, tileGridSize=(8, 8))
+        gray = clahe.apply(gray)
+
+        # Letterbox Resizing to 640x400
+        TRAIN_H, TRAIN_W = 400, 640
+        scale = min(TRAIN_W / orig_w, TRAIN_H / orig_h)
+        new_w, new_h = int(orig_w * scale), int(orig_h * scale)
+        resized = cv2.resize(gray, (new_w, new_h), interpolation=cv2.INTER_LINEAR)
+        canvas = np.zeros((TRAIN_H, TRAIN_W), dtype=np.uint8)
+        y_off = (TRAIN_H - new_h) // 2
+        x_off = (TRAIN_W - new_w) // 2
+        canvas[y_off:y_off+new_h, x_off:x_off+new_w] = resized
+
+        input_npy = canvas[np.newaxis, np.newaxis].astype(np.float32)
+
         pred_mask = np.squeeze(
             self.predictor.predict_single_npy_array(
                 input_npy,
@@ -357,45 +372,48 @@ class Detector2DPlugin(PupilDetectorPlugin):
                 None,
                 False,
             )
-        )  # shape=[400,640], 라벨(0..3)
+        )
 
-        # 원래 카메라 해상도로 되돌리기
-        pred_mask = cv2.resize(pred_mask.astype(np.uint8), (orig_w, orig_h), interpolation=cv2.INTER_NEAREST)
-        if getattr(self, 'show_comparison', True):
-            self.comparator.compare(gray, pred_mask)  # 비교 시각화
+        # Crop letterbox back to original aspect
+        pred_mask_cropped = pred_mask[y_off:y_off+new_h, x_off:x_off+new_w]
+        pred_mask = cv2.resize(pred_mask_cropped.astype(np.uint8), (orig_w, orig_h), interpolation=cv2.INTER_NEAREST)
+        
+        if getattr(self, 'show_comparison', False):
+            self.comparator.compare(gray, pred_mask)
         else:
             self.comparator.cleanup()
 
-        # ---------- 3) 동공 라벨(3)만 추출 -> 이진 마스크 (0 or 255) ----------
         pupil_mask = np.zeros_like(pred_mask, dtype=np.uint8)
         pupil_mask[pred_mask == PUPIL_CLASS_ID] = 255
 
-        # ---------- 4) findContours + fitEllipse ----------
-        contours, _ = cv2.findContours(
-            pupil_mask, cv2.RETR_LIST, cv2.CHAIN_APPROX_NONE
-        )
+        contours, _ = cv2.findContours(pupil_mask, cv2.RETR_LIST, cv2.CHAIN_APPROX_NONE)
 
-        end_time = time.time()
-        elapsed = end_time - start_time
+        elapsed = time.time() - start_time
         if elapsed > 0:
             logger.debug(f"U-Mamba inference FPS: {1.0 / elapsed:.1f}")
 
         if not contours:
             return self._empty_datum(frame)
 
-        # 가장 큰 컨투어 선택
         best_contour = max(contours, key=cv2.contourArea)
         if len(best_contour) < 5:
             return self._empty_datum(frame)
 
-        ellipse = cv2.fitEllipse(best_contour)  # ((cx, cy),(MA, ma), angleDeg)
+        ellipse = cv2.fitEllipse(best_contour)
         (cx, cy), (MA, ma), angle_deg = ellipse
-        conf_val = 1.0
+
+        if flip_v:
+            cy = orig_h - 1 - cy
+            angle_deg = 180.0 - angle_deg
+            
+        if flip_h:
+            cx = orig_w - 1 - cx
+            angle_deg = 180.0 - angle_deg
 
         result = {
             "location": (float(cx), float(cy)),
             "diameter": float(MA),
-            "confidence": conf_val,
+            "confidence": 1.0,
             "ellipse": {
                 "axes": (float(MA), float(ma)),
                 "angle": float(angle_deg),
@@ -403,23 +421,89 @@ class Detector2DPlugin(PupilDetectorPlugin):
             },
         }
 
-        # ---------- 5) Pupil Labs 최종 datum 생성 ----------
-        norm_pos = normalize(
-            result["location"], (frame.width, frame.height), flip_y=True
-        )
-
+        norm_pos = normalize(result["location"], (frame.width, frame.height), flip_y=True)
         datum = self.create_pupil_datum(
             norm_pos=norm_pos,
             diameter=result["diameter"],
             confidence=result["confidence"],
             timestamp=frame.timestamp,
         )
+        datum["ellipse"] = result["ellipse"]
+        return datum
 
-        datum["ellipse"] = {}
-        datum["ellipse"]["axes"] = result["ellipse"]["axes"]
-        datum["ellipse"]["angle"] = result["ellipse"]["angle"]
-        datum["ellipse"]["center"] = result["ellipse"]["center"]
+    def _detect_ritnet(self, frame, **kwargs):
+        start_time = time.time()
+        gray = frame.gray
+        if gray is None:
+            return self._empty_datum(frame)
 
+        gray = gray.astype(np.uint8)
+        orig_h, orig_w = gray.shape[:2]
+
+        flip_v = getattr(self, "flip_vertically", False)
+        if flip_v:
+            gray = cv2.flip(gray, 0)
+            
+        flip_h = getattr(self, "flip_horizontally", False)
+        if flip_h:
+            gray = cv2.flip(gray, 1)
+
+        # RITnet inference using ComparisonVisualizer's loaded model
+        pred_mask = self.comparator._run_ritnet(gray)
+
+        if getattr(self, 'show_comparison', False):
+            # Pass zero mask for UMamba so comparison shows RITnet only
+            empty_umamba = np.zeros_like(pred_mask)
+            self.comparator.compare(gray, empty_umamba)
+        else:
+            self.comparator.cleanup()
+
+        pupil_mask = np.zeros_like(pred_mask, dtype=np.uint8)
+        pupil_mask[pred_mask == PUPIL_CLASS_ID] = 255
+
+        contours, _ = cv2.findContours(pupil_mask, cv2.RETR_LIST, cv2.CHAIN_APPROX_NONE)
+
+        elapsed = time.time() - start_time
+        if elapsed > 0:
+            logger.debug(f"RITnet inference FPS: {1.0 / elapsed:.1f}")
+
+        if not contours:
+            return self._empty_datum(frame)
+
+        best_contour = max(contours, key=cv2.contourArea)
+        if len(best_contour) < 5:
+            return self._empty_datum(frame)
+
+        ellipse = cv2.fitEllipse(best_contour)
+        (cx, cy), (MA, ma), angle_deg = ellipse
+
+        if flip_v:
+            cy = orig_h - 1 - cy
+            angle_deg = 180.0 - angle_deg
+            
+        if flip_h:
+            cx = orig_w - 1 - cx
+            angle_deg = 180.0 - angle_deg
+
+        result = {
+            "location": (float(cx), float(cy)),
+            "diameter": float(MA),
+            "confidence": 1.0,
+            "ellipse": {
+                "axes": (float(MA), float(ma)),
+                "angle": float(angle_deg),
+                "center": (float(cx), float(cy)),
+            },
+        }
+
+        norm_pos = normalize(result["location"], (frame.width, frame.height), flip_y=True)
+        datum = self.create_pupil_datum(
+            norm_pos=norm_pos,
+            diameter=result["diameter"],
+            confidence=result["confidence"],
+            timestamp=frame.timestamp,
+        )
+        datum["ellipse"] = result["ellipse"]
         return datum
 
     def _empty_datum(self, frame):
@@ -491,6 +575,9 @@ class Detector2DPlugin(PupilDetectorPlugin):
             + "Adjust the pupil min and pupil max ranges (red circles) so that the detected pupil size (green circle) is within the bounds."
         )
         self.menu.append(info)
+        self.menu.append(ui.Selector("active_model", self, label="Active Model", selection=["U-Mamba", "RITnet", "2D C++"]))
+        self.menu.append(ui.Switch("flip_vertically", self, label="Flip Vertically (Eye 0)"))
+        self.menu.append(ui.Switch("flip_horizontally", self, label="Flip Horizontally (Eye 0)"))
         self.menu.append(ui.Switch("show_comparison", self, label="Show RITnet vs U-Mamba"))
         self.menu.append(
             ui.Slider(
@@ -528,7 +615,6 @@ class Detector2DPlugin(PupilDetectorPlugin):
             "detection. The default value is 160."
         )
         self.menu.append(info)
-        self.menu.append(ui.Switch("show_comparison", self, label="Show RITnet vs U-Mamba"))
         self.menu.append(
             ui.Slider(
                 "canny_treshold",

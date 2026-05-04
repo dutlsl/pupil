@@ -24,6 +24,10 @@ import torch
 import PIL.Image
 import torchvision
 
+# PyTorch의 멀티스레딩이 CPU 자원을 독식하여 USB 카메라 프레임 수신(uvc)을
+# 방해하는 현상(Corrupt JPEG data)을 막기 위해 CPU 스레드 수를 1로 제한합니다.
+torch.set_num_threads(1)
+
 logger = logging.getLogger(__name__)
 
 # ─── RITnet 전처리 상수 ───
