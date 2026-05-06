@@ -118,6 +118,22 @@ class Detector2DPlugin(PupilDetectorPlugin):
         self.flip_vertically = False
         self.flip_horizontally = False
         self.active_model = "TransUNet"
+
+        # --- Phase 1 optimizations ---
+        # 1-B: Reuse CLAHE object (avoid re-creation every frame)
+        self._clahe = cv2.createCLAHE(clipLimit=1.5, tileGridSize=(8, 8))
+
+        # 1-B: Mixed Precision support
+        self._use_amp = (self.device.type == "cuda")
+
+        # 1-C: FPS logging (interval-based, not every frame)
+        self._fps_log_interval = 5.0  # seconds
+        self._fps_log_last = time.time()
+        self._fps_samples = []
+
+        # 1-D: Temporal Smoothing state
+        self._prev_center = None
+        self._smooth_alpha = 0.4  # EMA weight for new value (lower = smoother)
         # ========================================================================
 
     def get_init_dict(self):
@@ -332,6 +348,9 @@ class Detector2DPlugin(PupilDetectorPlugin):
             return obj
 
     #################### TransUNet ###################################
+    # Pre-computed gamma LUT (constant across frames)
+    _GAMMA_LUT = (255.0 * (np.linspace(0, 1, 256) ** 0.8)).astype(np.uint8)
+
     def _detect_transunet(self, frame, **kwargs):
         start_time = time.time()
         gray = frame.gray
@@ -345,33 +364,36 @@ class Detector2DPlugin(PupilDetectorPlugin):
         flip_v = getattr(self, "flip_vertically", False)
         if flip_v:
             gray = cv2.flip(gray, 0)
-            
+
         flip_h = getattr(self, "flip_horizontally", False)
         if flip_h:
             gray = cv2.flip(gray, 1)
 
-        # CLAHE (like RITnet)
-        table = 255.0 * (np.linspace(0, 1, 256) ** 0.8)
-        gray = cv2.LUT(gray, table.astype(np.uint8))
-        clahe = cv2.createCLAHE(clipLimit=1.5, tileGridSize=(8, 8))
-        gray = clahe.apply(gray)
+        # Preprocessing: gamma correction + CLAHE (reuse cached objects)
+        gray = cv2.LUT(gray, self._GAMMA_LUT)
+        gray = self._clahe.apply(gray)
 
         # TransUNet expects RGB 224x224 and scale 0~1
         gray_rgb = cv2.cvtColor(gray, cv2.COLOR_GRAY2RGB).astype(np.float32) / 255.0
         gray_res = cv2.resize(gray_rgb, (224, 224), interpolation=cv2.INTER_LINEAR)
         img_chw = np.transpose(gray_res, (2, 0, 1))  # 3xHxW
-        
+
         input_tensor = torch.from_numpy(img_chw).unsqueeze(0).to(self.device)
 
-        with torch.no_grad():
-            logits = self.transunet_model(input_tensor)
+        # Phase 1-B: Mixed Precision inference
+        with torch.inference_mode():
+            if self._use_amp:
+                with torch.cuda.amp.autocast():
+                    logits = self.transunet_model(input_tensor)
+            else:
+                logits = self.transunet_model(input_tensor)
             if isinstance(logits, list):
                 logits = logits[-1]
-            pred = logits.argmax(1) # (1, H, W)
-            
+            pred = logits.argmax(1)  # (1, H, W)
+
         pred_mask_224 = pred[0].detach().cpu().numpy().astype(np.uint8)
         pred_mask = cv2.resize(pred_mask_224, (orig_w, orig_h), interpolation=cv2.INTER_NEAREST)
-        
+
         if getattr(self, 'show_comparison', False):
             self.comparator.compare(gray, pred_mask)
         else:
@@ -380,17 +402,22 @@ class Detector2DPlugin(PupilDetectorPlugin):
         pupil_mask = np.zeros_like(pred_mask, dtype=np.uint8)
         pupil_mask[pred_mask == PUPIL_CLASS_ID] = 255
 
+        # 성능 향상 트릭: 패치 단위의 계단 현상 부드럽게 만들기
+        pupil_mask = cv2.GaussianBlur(pupil_mask, (5, 5), 0)
+        _, pupil_mask = cv2.threshold(pupil_mask, 127, 255, cv2.THRESH_BINARY)
+
         contours, _ = cv2.findContours(pupil_mask, cv2.RETR_LIST, cv2.CHAIN_APPROX_NONE)
 
-        elapsed = time.time() - start_time
-        if elapsed > 0:
-            logger.debug(f"TransUNet inference FPS: {1.0 / elapsed:.1f}")
+        # FPS 로깅 제거 (콘솔 청소)
+        pass
 
         if not contours:
+            self._prev_center = None  # reset temporal smoothing on detection loss
             return self._empty_datum(frame)
 
         best_contour = max(contours, key=cv2.contourArea)
         if len(best_contour) < 5:
+            self._prev_center = None
             return self._empty_datum(frame)
 
         ellipse = cv2.fitEllipse(best_contour)
@@ -399,15 +426,31 @@ class Detector2DPlugin(PupilDetectorPlugin):
         if flip_v:
             cy = orig_h - 1 - cy
             angle_deg = 180.0 - angle_deg
-            
+
         if flip_h:
             cx = orig_w - 1 - cx
             angle_deg = 180.0 - angle_deg
 
+        # 사용자 요청: 약한 수준의 Confidence 필터 복구
+        # 면적 비율과 종횡비를 곱한 뒤, 제곱근(sqrt)을 씌워 점수를 관대하게(높게) 끌어올림.
+        # 예: 원래 0.49점 -> 0.70점으로 통과. 진짜 쓰레기값만 필터링됨.
+        area = cv2.contourArea(best_contour)
+        ellipse_area = np.pi * (MA / 2.0) * (ma / 2.0)
+        area_ratio = min(area, ellipse_area) / (max(area, ellipse_area) + 1e-6)
+        aspect_ratio = min(MA, ma) / (max(MA, ma) + 1e-6)
+        confidence = float(np.clip(np.sqrt(area_ratio * aspect_ratio), 0.0, 1.0))
+
+        # Phase 1-D: Temporal Smoothing (EMA)
+        if self._prev_center is not None:
+            a = self._smooth_alpha
+            cx = a * cx + (1.0 - a) * self._prev_center[0]
+            cy = a * cy + (1.0 - a) * self._prev_center[1]
+        self._prev_center = (cx, cy)
+
         result = {
             "location": (float(cx), float(cy)),
             "diameter": float(MA),
-            "confidence": 1.0,
+            "confidence": confidence,
             "ellipse": {
                 "axes": (float(MA), float(ma)),
                 "angle": float(angle_deg),
@@ -455,6 +498,10 @@ class Detector2DPlugin(PupilDetectorPlugin):
         pupil_mask = np.zeros_like(pred_mask, dtype=np.uint8)
         pupil_mask[pred_mask == PUPIL_CLASS_ID] = 255
 
+        # RITnet 경로에도 동일하게 스무딩 적용
+        pupil_mask = cv2.GaussianBlur(pupil_mask, (5, 5), 0)
+        _, pupil_mask = cv2.threshold(pupil_mask, 127, 255, cv2.THRESH_BINARY)
+
         contours, _ = cv2.findContours(pupil_mask, cv2.RETR_LIST, cv2.CHAIN_APPROX_NONE)
 
         elapsed = time.time() - start_time
@@ -474,15 +521,22 @@ class Detector2DPlugin(PupilDetectorPlugin):
         if flip_v:
             cy = orig_h - 1 - cy
             angle_deg = 180.0 - angle_deg
-            
+
         if flip_h:
             cx = orig_w - 1 - cx
             angle_deg = 180.0 - angle_deg
 
+        # 사용자 요청: 약한 수준의 Confidence 필터 복구
+        area = cv2.contourArea(best_contour)
+        ellipse_area = np.pi * (MA / 2.0) * (ma / 2.0)
+        area_ratio = min(area, ellipse_area) / (max(area, ellipse_area) + 1e-6)
+        aspect_ratio = min(MA, ma) / (max(MA, ma) + 1e-6)
+        confidence = float(np.clip(np.sqrt(area_ratio * aspect_ratio), 0.0, 1.0))
+
         result = {
             "location": (float(cx), float(cy)),
             "diameter": float(MA),
-            "confidence": 1.0,
+            "confidence": confidence,
             "ellipse": {
                 "axes": (float(MA), float(ma)),
                 "angle": float(angle_deg),

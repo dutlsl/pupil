@@ -277,7 +277,7 @@ def eye(
 
             glViewport(0, 0, *window_size)
             # render graphs
-            # fps_graph.draw()
+            fps_graph.draw()
             cpu_graph.draw()
 
             # render GUI
@@ -593,12 +593,16 @@ def eye(
         cpu_graph.update_rate = 5
         cpu_graph.label = "CPU %0.1f"
 
-        # fps_graph = graph.Bar_Graph()
-        # fps_graph.pos = (140, 50)
-        # fps_graph.update_rate = 5
-        # fps_graph.label = "%0.0f FPS"
-        g_pool.graphs = [cpu_graph]
-        # g_pool.graphs = [cpu_graph, fps_graph]
+        fps_graph = graph.Bar_Graph()
+        fps_graph.pos = (140, 50)
+        fps_graph.update_rate = 5
+        fps_graph.label = "%0.0f FPS"
+        g_pool.graphs = [cpu_graph, fps_graph]
+
+        # FPS periodic logging state
+        fps_log_interval = 5.0  # seconds
+        fps_log_last_time = time.time()
+        fps_log_samples = []
 
         # set the last saved window size
         on_resize(main_window, *glfw.get_framebuffer_size(main_window))
@@ -750,11 +754,8 @@ def eye(
                 t = frame.timestamp
                 dt, ts = t - ts, t
                 try:
-                    pass
-                    # fps_graph.add(1.0 / dt)
-                    ######fps 속도 출력 #########
-                    # fps = 1.0 / dt
-                    # print(f"[Eye{eye_id}] {fps:.2f} FPS")
+                    current_fps = 1.0 / dt
+                    fps_graph.add(current_fps)
                 except ZeroDivisionError:
                     pass
 
@@ -777,6 +778,7 @@ def eye(
 
             # GL drawing
             if window_should_update():
+                fps_graph.update()
                 cpu_graph.update()
                 if is_window_visible(main_window):
                     consume_events_and_render_buffer()

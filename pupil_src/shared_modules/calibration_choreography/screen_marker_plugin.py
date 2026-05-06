@@ -73,12 +73,13 @@ class ScreenMarkerChoreographyPlugin(
         if ChoreographyMode.CALIBRATION == mode:
             # return [(0.5, 0.5), (0.0, 1.0), (1.0, 1.0), (1.0, 0.0), (0.0, 0.0)]
             # return [(0.5, 0.5), (0.5, 1.0), (1.0, 0.5), (0.5, 0.0), (0.0, 0.5)]
-            return [(0.4, 0.6), (0.6, 0.6), (0.6, 0.4), (0.4, 0.4)]
+            return [(0.0, 1.0), (0.5, 1.0), (1.0, 1.0), (0.0, 0.5), (0.5, 0.5), (1.0, 0.5), (0.0, 0.0), (0.5, 0.0), (1.0, 0.0)]
+            # return [(0.4, 0.6), (0.6, 0.6), (0.6, 0.4), (0.4, 0.4)]
         if ChoreographyMode.VALIDATION == mode:
             # return [(0.5, 1.0), (1.0, 0.5), (0.5, 0.0), (0.0, 0.5)]
             # return [(0.5, 0.8), (0.8, 0.5), (0.5, 0.2), (0.2, 0.5), (0.5, 0.5)]
             # return [(0.2, 0.8), (0.8, 0.8), (0.8, 0.2), (0.2, 0.2)]
-            return [(0.4, 0.6), (0.6, 0.6), (0.6, 0.4), (0.4, 0.4)]
+            return [(0.4, 0.6), (0.6, 0.6), (0.6, 0.4), (0.4, 0.4), (0.5, 0.5)]
             # return [(0.0, 1.0), (1.0, 1.0), (1.0, 0.0), (0.0, 0.0)]
         raise ValueError(f"Unknown mode {mode}")
 
@@ -87,7 +88,7 @@ class ScreenMarkerChoreographyPlugin(
         g_pool,
         fullscreen=True,
         marker_scale=1.0,
-        sample_duration=40,
+        sample_duration=60,
         monitor_name=None,
         **kwargs,
     ):
