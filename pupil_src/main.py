@@ -1,3 +1,5 @@
+import warnings
+warnings.simplefilter('ignore', FutureWarning)
 import torch as _torch
 _orig_load = _torch.load
 def _patched_load(*a, **kw):
