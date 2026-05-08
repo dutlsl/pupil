@@ -134,6 +134,7 @@ class Detector2DPlugin(PupilDetectorPlugin):
         # 1-D: Temporal Smoothing state
         self._prev_center = None
         self._smooth_alpha = 0.4  # EMA weight for new value (lower = smoother)
+        self._consecutive_jumps = 0 # JUMP 횟수 추적
         # ========================================================================
 
     def get_init_dict(self):
@@ -438,13 +439,36 @@ class Detector2DPlugin(PupilDetectorPlugin):
         ellipse_area = np.pi * (MA / 2.0) * (ma / 2.0)
         area_ratio = min(area, ellipse_area) / (max(area, ellipse_area) + 1e-6)
         aspect_ratio = min(MA, ma) / (max(MA, ma) + 1e-6)
+
+        # --- 반눈(Half-blink) 찌그러짐 무시 로직 ---
+        # 0.45로는 안 잡히던 찌그러짐을 0.65로 대폭 상향하여 
+        # 눈꺼풀에 조금이라도 눌린 동공은 모조리 빈 데이터로 날려버립니다.
+        if aspect_ratio < 0.65:
+            self._prev_center = None
+            return self._empty_datum(frame)
+
         confidence = float(np.clip(np.sqrt(area_ratio * aspect_ratio), 0.0, 1.0))
 
         # Phase 1-D: Temporal Smoothing (EMA)
         if self._prev_center is not None:
+            # --- Velocity Outlier Rejection (순간이동 차단) ---
+            dist = np.sqrt((cx - self._prev_center[0])**2 + (cy - self._prev_center[1])**2)
+            if dist > 40.0:
+                self._consecutive_jumps += 1
+                if self._consecutive_jumps < 5:
+                    confidence = 0.0
+                    cx, cy = self._prev_center # 3D 모델과 EMA가 엉뚱한 곳으로 끌려가지 않도록 고정
+                else:
+                    self._consecutive_jumps = 0
+            else:
+                self._consecutive_jumps = 0
+
             a = self._smooth_alpha
             cx = a * cx + (1.0 - a) * self._prev_center[0]
             cy = a * cy + (1.0 - a) * self._prev_center[1]
+        else:
+            self._consecutive_jumps = 0
+
         self._prev_center = (cx, cy)
 
         result = {
@@ -531,6 +555,11 @@ class Detector2DPlugin(PupilDetectorPlugin):
         ellipse_area = np.pi * (MA / 2.0) * (ma / 2.0)
         area_ratio = min(area, ellipse_area) / (max(area, ellipse_area) + 1e-6)
         aspect_ratio = min(MA, ma) / (max(MA, ma) + 1e-6)
+
+        # --- 반눈(Half-blink) 찌그러짐 무시 로직 ---
+        if aspect_ratio < 0.65:
+            return self._empty_datum(frame)
+
         confidence = float(np.clip(np.sqrt(area_ratio * aspect_ratio), 0.0, 1.0))
 
         result = {
