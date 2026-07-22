@@ -127,8 +127,8 @@ def get_list_of_markers_to_show(mode: ChoreographyMode) -> list:
             (0.0, 0.0), (0.5, 0.0), (1.0, 0.0),  # 7, 8, 9 (하단 행)
         ]
     if ChoreographyMode.VALIDATION == mode:
-        # 검증(Validation / Accuracy Test) 타겟: (0.5, 0.5) 중앙 4회 연속 표시
-        return [(0.5, 0.5), (0.5, 0.5), (0.5, 0.5), (0.5, 0.5)]
+        # 검증(Validation / Accuracy Test) 타겟: 상단 중앙 (0.5, 1.0) 4회 연속 표시
+        return [(0.5, 1.0), (0.5, 1.0), (0.5, 1.0), (0.5, 1.0)]
 ```
 - **수정 가이드**:
   - 화면 정중앙 및 4개 모서리(5-point) 외에 9-point 패턴이나 커스텀 좌표로 수정하려면 해당 리스트 `[(x1, y1), (x2, y2), ...]`의 튜플 항목을 직접 편집합니다.
