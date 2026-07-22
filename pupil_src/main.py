@@ -4,6 +4,13 @@ os.environ["MKL_NUM_THREADS"] = "4"
 import platform
 import sys
 
+import torch as _torch
+_orig_load = _torch.load
+def _patched_load(*args, **kwargs):
+    kwargs.setdefault("weights_only", False)
+    return _orig_load(*args, **kwargs)
+_torch.load = _patched_load
+
 if len(sys.argv) == 1:
     sys.argv.append("capture")  # 원하는 기본 인자를 설정
 

@@ -239,7 +239,7 @@ class Detector2DPlugin(PupilDetectorPlugin):
     def _preprocess_nnunet_frame(self, frame):
         gray = frame.gray
         if gray is None:
-            return None, 0, 0, False, False
+            return None, 0, 0, False, False, False
 
         gray = gray.astype(np.uint8)
         orig_h, orig_w = gray.shape[:2]
@@ -252,22 +252,28 @@ class Detector2DPlugin(PupilDetectorPlugin):
         if flip_h:
             gray = cv2.flip(gray, 1)
 
-        # Z-Score normalization
-        img_norm = (gray.astype(np.float32) - MEAN_VAL) / STD_VAL
-        t_tensor = torch.from_numpy(img_norm).unsqueeze(0).unsqueeze(0).to(self.device)
+        # Dynamic Z-Score normalization (adapts to camera IR domain shifts)
+        gray_float = gray.astype(np.float32)
+        mean_val = float(gray_float.mean())
+        std_val = float(gray_float.std()) + 1e-8
+        img_norm = (gray_float - mean_val) / std_val
 
-        # Pad to multiple of 64
-        target_h = ((orig_h + 63) // 64) * 64
-        target_w = ((orig_w + 63) // 64) * 64
-        pad_h = target_h - orig_h
-        pad_w = target_w - orig_w
-        if pad_h > 0 or pad_w > 0:
-            t_tensor = torch.nn.functional.pad(t_tensor, (0, pad_w, 0, pad_h), mode='constant', value=0)
+        # Letterboxing: Aspect Ratio Preserving Padding to 640x400
+        # Prevents Pupil Core (192x192) horizontal stretching distortion
+        if (orig_h, orig_w) == (400, 640):
+            t_tensor = torch.from_numpy(img_norm).unsqueeze(0).unsqueeze(0).to(self.device)
+            is_letterboxed = False
+        else:
+            img_400 = cv2.resize(img_norm, (400, 400), interpolation=cv2.INTER_LINEAR)
+            canvas = np.zeros((400, 640), dtype=np.float32)
+            canvas[:, 120:520] = img_400
+            t_tensor = torch.from_numpy(canvas).unsqueeze(0).unsqueeze(0).to(self.device)
+            is_letterboxed = True
 
-        return t_tensor, orig_h, orig_w, flip_v, flip_h
+        return t_tensor, orig_h, orig_w, flip_v, flip_h, is_letterboxed
 
     def _detect_temporal_unet(self, frame, **kwargs):
-        t_tensor, orig_h, orig_w, flip_v, flip_h = self._preprocess_nnunet_frame(frame)
+        t_tensor, orig_h, orig_w, flip_v, flip_h, is_letterboxed = self._preprocess_nnunet_frame(frame)
         if t_tensor is None:
             return self._empty_datum(frame)
 
@@ -280,12 +286,14 @@ class Detector2DPlugin(PupilDetectorPlugin):
 
             if isinstance(logits, (list, tuple)):
                 logits = logits[0]
-            pred_mask = logits.argmax(dim=1)[:, :orig_h, :orig_w].squeeze(0).cpu().numpy().astype(np.uint8)
+            
+            # Squeeze to (400, 640) for postprocessing
+            pred_mask = logits.argmax(dim=1).squeeze(0).cpu().numpy().astype(np.uint8)
 
-        return self._postprocess_mask_to_datum(pred_mask, frame, orig_h, orig_w, flip_v, flip_h)
+        return self._postprocess_mask_to_datum(pred_mask, frame, orig_h, orig_w, flip_v, flip_h, is_letterboxed)
 
     def _detect_nnunet_2d(self, frame, **kwargs):
-        t_tensor, orig_h, orig_w, flip_v, flip_h = self._preprocess_nnunet_frame(frame)
+        t_tensor, orig_h, orig_w, flip_v, flip_h, is_letterboxed = self._preprocess_nnunet_frame(frame)
         if t_tensor is None:
             return self._empty_datum(frame)
 
@@ -298,11 +306,19 @@ class Detector2DPlugin(PupilDetectorPlugin):
 
             if isinstance(logits, (list, tuple)):
                 logits = logits[0]
-            pred_mask = logits.argmax(dim=1)[:, :orig_h, :orig_w].squeeze(0).cpu().numpy().astype(np.uint8)
 
-        return self._postprocess_mask_to_datum(pred_mask, frame, orig_h, orig_w, flip_v, flip_h)
+            pred_mask = logits.argmax(dim=1).squeeze(0).cpu().numpy().astype(np.uint8)
 
-    def _postprocess_mask_to_datum(self, pred_mask, frame, orig_h, orig_w, flip_v, flip_h):
+        return self._postprocess_mask_to_datum(pred_mask, frame, orig_h, orig_w, flip_v, flip_h, is_letterboxed)
+
+    def _postprocess_mask_to_datum(self, raw_pred_mask, frame, orig_h, orig_w, flip_v, flip_h, is_letterboxed=False):
+        if is_letterboxed:
+            # Crop 120px left/right padding -> 400x400 -> resize back to orig_w x orig_h (192x192)
+            mask_400 = raw_pred_mask[:, 120:520]
+            pred_mask = cv2.resize(mask_400, (orig_w, orig_h), interpolation=cv2.INTER_NEAREST)
+        else:
+            pred_mask = raw_pred_mask[:orig_h, :orig_w]
+
         pupil_mask = np.zeros_like(pred_mask, dtype=np.uint8)
         pupil_mask[pred_mask == PUPIL_CLASS_ID] = 255
 

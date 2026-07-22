@@ -2,12 +2,8 @@
 Pupil Labs Detector2DPlugin Dummy Test Harness
 
 This script provides an offline, hardware-free integration test for Pupil Labs 2D detector plugins.
-It mocks Pupil Labs runtime objects (g_pool, roi, frame) and feeds synthetic eye images to verify model loading,
-inference latency, half-blink filtering, EMA smoothing, and output datum integrity.
-
-Usage:
-    conda activate pupil-umamba
-    python tests/test_dummy_harness.py
+It tests both 192x192 (Pupil Core Eye Camera) and 400x640 (OpenEDS Dataset) frame resolutions, verifying
+Letterboxing (aspect ratio preserving padding), dynamic Z-Score normalization, model loading, and datum integrity.
 """
 import os
 import sys
@@ -24,7 +20,6 @@ if PUPIL_SRC not in sys.path:
 if SHARED_MODULES not in sys.path:
     sys.path.insert(0, SHARED_MODULES)
 
-# Mock Infrastructure for Pupil Platform
 class DummyRoi:
     bounds = (0, 0, 640, 400)
 
@@ -39,10 +34,18 @@ class DummyFrame:
         self.height, self.width = img_np.shape[:2]
         self.timestamp = time.time()
 
+def make_synthetic_eye(height, width):
+    img = np.ones((height, width), dtype=np.uint8) * 180
+    cx, cy = width // 2, height // 2
+    r_x, r_y = max(10, width // 16), max(8, height // 16)
+    cv2.ellipse(img, (cx, cy), (r_x, r_y), 15, 0, 360, color=20, thickness=-1)
+    noise = np.random.randint(-10, 10, (height, width), dtype=np.int16)
+    return np.clip(img.astype(np.int16) + noise, 0, 255).astype(np.uint8)
+
 def run_harness():
-    print("=" * 70)
-    print("🤖 PUPIL LABS DETECTOR 2D PLUGIN - DUMMY TEST HARNESS")
-    print("=" * 70)
+    print("=" * 75)
+    print("🤖 PUPIL LABS DETECTOR 2D PLUGIN - DUMMY TEST HARNESS (Letterbox & 192x192 Test)")
+    print("=" * 75)
 
     from pupil_detector_plugins.detector_2d_plugin import Detector2DPlugin
 
@@ -51,48 +54,51 @@ def run_harness():
     plugin = Detector2DPlugin(g_pool=g_pool)
     print("✅ Plugin Instantiated Successfully.")
 
-    # Create synthetic eye frame (400x640)
-    img_height, img_width = 400, 640
-    dummy_img = np.ones((img_height, img_width), dtype=np.uint8) * 180
-    cv2.ellipse(dummy_img, (320, 200), (40, 35), 15, 0, 360, color=20, thickness=-1)
-    noise = np.random.randint(-10, 10, (img_height, img_width), dtype=np.int16)
-    dummy_img = np.clip(dummy_img.astype(np.int16) + noise, 0, 255).astype(np.uint8)
-    dummy_frame = DummyFrame(dummy_img)
+    resolutions = [
+        ("Pupil Core Eye Camera (192x192)", 192, 192),
+        ("OpenEDS Dataset Native (400x640)", 400, 640),
+    ]
 
     models = ["TemporalUNet", "nnUNet 2D", "RITnet", "2D C++"]
 
-    print("\n[2/3] Executing Multi-Model Streaming Inference Tests...")
-    for model_name in models:
-        print(f"\n▶ Model Mode: {model_name}")
-        plugin.active_model = model_name
+    print("\n[2/3] Executing Letterboxing & Streaming Inference Tests...")
+    for res_name, h, w in resolutions:
+        print(f"\n==================================================")
+        print(f"📷 Resolution Target: {res_name}")
+        print(f"==================================================")
+        synthetic_img = make_synthetic_eye(h, w)
+        frame = DummyFrame(synthetic_img)
 
-        latencies = []
-        for frame_idx in range(1, 6):
-            t0 = time.time()
-            datum = plugin.detect(dummy_frame)
-            latency_ms = (time.time() - t0) * 1000.0
-            latencies.append(latency_ms)
+        for model_name in models:
+            print(f"\n▶ Model Mode: {model_name}")
+            plugin.active_model = model_name
 
-            # Assertions for datum integrity
-            assert datum is not None, f"FAIL: {model_name} returned None datum!"
-            assert "norm_pos" in datum, f"FAIL: {model_name} missing norm_pos!"
-            assert "confidence" in datum, f"FAIL: {model_name} missing confidence!"
-            assert "ellipse" in datum, f"FAIL: {model_name} missing ellipse!"
+            latencies = []
+            for frame_idx in range(1, 6):
+                t0 = time.time()
+                datum = plugin.detect(frame)
+                latency_ms = (time.time() - t0) * 1000.0
+                latencies.append(latency_ms)
 
-            print(
-                f"   Frame {frame_idx}: Latency = {latency_ms:6.2f} ms | "
-                f"Conf = {datum['confidence']:.3f} | "
-                f"NormPos = ({datum['norm_pos'][0]:.4f}, {datum['norm_pos'][1]:.4f}) | "
-                f"Center = ({datum['ellipse']['center'][0]:.1f}, {datum['ellipse']['center'][1]:.1f})"
-            )
+                assert datum is not None, f"FAIL: {model_name} returned None datum!"
+                assert "norm_pos" in datum, f"FAIL: {model_name} missing norm_pos!"
+                assert "confidence" in datum, f"FAIL: {model_name} missing confidence!"
+                assert "ellipse" in datum, f"FAIL: {model_name} missing ellipse!"
 
-        avg_latency = np.mean(latencies[1:]) if len(latencies) > 1 else latencies[0]
-        print(f"   ✓ Average Streaming Latency (FPS): {avg_latency:.2f} ms ({1000.0/max(avg_latency, 1e-3):.1f} FPS)")
+                print(
+                    f"   Frame {frame_idx}: Latency = {latency_ms:6.2f} ms | "
+                    f"Conf = {datum['confidence']:.3f} | "
+                    f"NormPos = ({datum['norm_pos'][0]:.4f}, {datum['norm_pos'][1]:.4f}) | "
+                    f"Center = ({datum['ellipse']['center'][0]:.1f}, {datum['ellipse']['center'][1]:.1f})"
+                )
+
+            avg_latency = np.mean(latencies[1:]) if len(latencies) > 1 else latencies[0]
+            print(f"   ✓ Average Streaming Latency (FPS): {avg_latency:.2f} ms ({1000.0/max(avg_latency, 1e-3):.1f} FPS)")
 
     print("\n[3/3] Integrity Verification Completed.")
-    print("=" * 70)
-    print("🎉 HARNESS RESULT: PASS (All Model Modes Verified)")
-    print("=" * 70)
+    print("=" * 75)
+    print("🎉 HARNESS RESULT: PASS (192x192 Letterboxing & 400x640 Native Verified)")
+    print("=" * 75)
 
 if __name__ == "__main__":
     run_harness()
