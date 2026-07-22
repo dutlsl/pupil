@@ -78,16 +78,16 @@ class ScreenMarkerChoreographyPlugin(
                 (0.0, 0.0), (0.5, 0.0), (1.0, 0.0),  # 7, 8, 9 (Bottom row)
             ]
         if ChoreographyMode.VALIDATION == mode:
-            # (0.5, 1.0) target 4 times
-            return [(0.5, 1.0), (0.5, 1.0), (0.5, 1.0), (0.5, 1.0)]
+            # (0.5, 0.5) center target 4 times
+            return [(0.5, 0.5), (0.5, 0.5), (0.5, 0.5), (0.5, 0.5)]
         raise ValueError(f"Unknown mode {mode}")
 
     def __init__(
         self,
         g_pool,
         fullscreen=True,
-        marker_scale=2.0,
-        sample_duration=80,
+        marker_scale=1.0,
+        sample_duration=40,
         monitor_name=None,
         **kwargs,
     ):
@@ -115,7 +115,6 @@ class ScreenMarkerChoreographyPlugin(
         d["fullscreen"] = self.is_fullscreen
         d["marker_scale"] = self.__marker_window.marker_scale
         d["monitor_name"] = self.selected_monitor_name
-        d["sample_duration"] = self.sample_duration
         return d
 
     ### Public - Plugin
@@ -147,7 +146,7 @@ class ScreenMarkerChoreographyPlugin(
         )
 
         self.__ui_slider_sample_duration = ui.Slider(
-            "sample_duration", self, label="Sample duration", min=10, max=1000, step=1
+            "sample_duration", self, label="Sample duration", min=10, max=100, step=1
         )
 
         return [
