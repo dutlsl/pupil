@@ -158,11 +158,11 @@ class Accuracy_Visualizer(Plugin):
     def __init__(
         self,
         g_pool,
-        outlier_threshold=1.5,  # Outlier Threshold 디폴트값 (기본 1.5도)
+        outlier_threshold=1.3,  # Outlier Threshold 디폴트값 (기본 1.3도)
         vis_mapping_error=True,
         vis_calibration_area=True,
     ):
 ```
 
 - **수정 가이드**:
-  - 테스트(Validation) 실행 시 자동으로 초기화되는 Outlier Threshold 기본값을 변경하려면 `outlier_threshold=1.5` 기본 매개변수의 숫자값을 원하는 값(예: `1.0`, `2.0` 등)으로 직접 변경하시면 됩니다.
+  - 테스트(Validation) 실행 시 자동으로 초기화되는 Outlier Threshold 기본값을 변경하려면 `outlier_threshold=1.3` 기본 매개변수의 숫자값을 원하는 값(예: `1.0`, `2.0` 등)으로 직접 변경하시면 됩니다.

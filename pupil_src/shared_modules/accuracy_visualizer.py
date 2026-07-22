@@ -178,7 +178,7 @@ class Accuracy_Visualizer(Plugin):
     def __init__(
         self,
         g_pool,
-        outlier_threshold=1.5,
+        outlier_threshold=1.3,
         vis_mapping_error=True,
         vis_calibration_area=True,
     ):
