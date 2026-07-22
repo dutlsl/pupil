@@ -363,7 +363,10 @@ class Detector2DPlugin(PupilDetectorPlugin):
             self._prev_center = None
             return self._empty_datum(frame)
 
-        confidence = float(np.clip(np.sqrt(area_ratio * aspect_ratio), 0.0, 1.0))
+        raw_conf = float(np.sqrt(max(0.0, area_ratio * aspect_ratio)))
+        confidence = float(np.clip(raw_conf, 0.0, 1.0))
+        if np.isnan(confidence):
+            confidence = 0.0
 
         # Temporal EMA smoothing & jump rejection
         if self._prev_center is not None:

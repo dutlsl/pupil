@@ -163,11 +163,13 @@ class Pye3DPlugin(PupilDetectorPlugin):
         self._process_camera_changes()
 
         previous_detection_results = kwargs.get("previous_detection_results", [])
+        datum_2d = None
         for datum in previous_detection_results:
-            if datum.get("method", "") == "2d c++":
+            if "2d" in datum.get("topic", "") or "2d" in datum.get("method", "").lower() or "ellipse" in datum:
                 datum_2d = datum
                 break
-        else:
+        
+        if datum_2d is None:
             logger.warning(
                 "Required 2d pupil detection input not available. "
                 "Returning default pye3d datum."
@@ -186,13 +188,20 @@ class Pye3DPlugin(PupilDetectorPlugin):
         norm_pos = normalize(
             result["location"], (frame.width, frame.height), flip_y=True
         )
+        conf = result.get("confidence", 0.0)
+        if np.isnan(conf):
+            conf = datum_2d.get("confidence", 0.0)
+            if np.isnan(conf):
+                conf = 0.0
+
         template = self.create_pupil_datum(
             norm_pos=norm_pos,
-            diameter=result["diameter"],
-            confidence=result["confidence"],
+            diameter=float(result.get("diameter", 0.0)),
+            confidence=float(conf),
             timestamp=frame.timestamp,
         )
         template.update(result)
+        template["confidence"] = float(conf)
 
         return template
 
