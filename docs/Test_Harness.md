@@ -1,5 +1,44 @@
 # Pupil Labs 딥러닝 동공 디텍터 사용자 가이드 및 실행 매뉴얼 (User Guide & Harness Manual)
 
+[20:23:32] WARNING  world - accuracy_visualizer: Not enough data available for angular accuracy calculation.                                                                                     accuracy_visualizer.py:397
+           INFO     world - accuracy_visualizer: Angular precision: 0.201 degrees                                                                                                                accuracy_visualizer.py:411
+[20:23:37] INFO     world - calibration_choreography.base_plugin: Starting  Calibration                                                                                                                  base_plugin.py:537
+open(): 그런 파일이나 디렉터리가 없습니다
+[20:23:56] INFO     world - calibration_choreography.base_plugin: Stopping  Calibration                                                                                                                  base_plugin.py:574
+open(): 그런 파일이나 디렉터리가 없습니다
+The maximum number of function evaluations is exceeded.
+Function evaluations 100, initial cost 1.4642e+03, final cost 3.0404e+01, first-order optimality 2.04e-02.
+`ftol` termination condition is satisfied.
+Function evaluations 29, initial cost 9.6691e+02, final cost 5.7024e+00, first-order optimality 2.43e-04.
+`ftol` termination condition is satisfied.
+Function evaluations 53, initial cost 4.8532e+02, final cost 2.7261e+00, first-order optimality 3.92e-05.
+/home/byeongjun/PycharmProjects/pupil/pupil_src/shared_modules/accuracy_visualizer.py:470: RuntimeWarning: Mean of empty slice.
+  accuracy = np.rad2deg(np.arccos(selected_samples.clip(-1.0, 1.0).mean()))
+/home/byeongjun/anaconda3/envs/pupil-umamba/lib/python3.10/site-packages/numpy/core/_methods.py:129: RuntimeWarning: invalid value encountered in divide
+  ret = ret.dtype.type(ret / rcount)
+[20:23:58] WARNING  world - accuracy_visualizer: Not enough data available for angular accuracy calculation.                                                                                     accuracy_visualizer.py:397
+           INFO     world - accuracy_visualizer: Angular precision: 0.206 degrees                                                                                                                accuracy_visualizer.py:411
+[20:24:12] INFO     world - calibration_choreography.base_plugin: Starting  Calibration                                                                                                                  base_plugin.py:537
+open(): 그런 파일이나 디렉터리가 없습니다
+*** Correcting clock frequency to 14999137
+[20:24:29] INFO     world - calibration_choreography.base_plugin: Stopping  Calibration                                                                                                                  base_plugin.py:574
+open(): 그런 파일이나 디렉터리가 없습니다
+The maximum number of function evaluations is exceeded.
+Function evaluations 100, initial cost 1.6532e+03, final cost 3.3094e+01, first-order optimality 1.39e-02.
+`ftol` termination condition is satisfied.
+Function evaluations 26, initial cost 9.7349e+02, final cost 6.0050e+00, first-order optimality 1.17e-04.
+`ftol` termination condition is satisfied.
+Function evaluations 33, initial cost 6.6930e+02, final cost 1.2248e+00, first-order optimality 3.65e-05.
+/home/byeongjun/PycharmProjects/pupil/pupil_src/shared_modules/accuracy_visualizer.py:470: RuntimeWarning: Mean of empty slice.
+  accuracy = np.rad2deg(np.arccos(selected_samples.clip(-1.0, 1.0).mean()))
+/home/byeongjun/anaconda3/envs/pupil-umamba/lib/python3.10/site-packages/numpy/core/_methods.py:129: RuntimeWarning: invalid value encountered in divide
+  ret = ret.dtype.type(ret / rcount)
+[20:24:31] WARNING  world - accuracy_visualizer: Not enough data available for angular accuracy calculation.                                                                                     accuracy_visualizer.py:397
+           INFO     world - accuracy_visualizer: Angular precision: 0.187 degrees                                                                                                                accuracy_visualizer.py:411
+*** Correcting clock frequency to 14999087
+^C[20:24:45] WARNING  MainProcess - root: Launcher shutting down with active children: [<Process name='eye1' pid=208816 parent=208743 started>, <Process name='world' pid=208757 parent=208743 started>, <Process main.py:351
+                    name='eye0' pid=208815 parent=208743 started>]   
+
 본 문서는 **Pupil Labs 딥러닝 동공 디텍터 모듈(`Detector2DPlugin`)의 실행 환경, GUI 조작법, 오프라인 검증, 트러블슈팅 및 캘리브레이션/검증 타겟 좌표 설정법을 정리한 유저 매뉴얼**입니다.
 
 ---

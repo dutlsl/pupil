@@ -178,7 +178,7 @@ class Accuracy_Visualizer(Plugin):
     def __init__(
         self,
         g_pool,
-        outlier_threshold=1.3,
+        outlier_threshold=2.5,
         vis_mapping_error=True,
         vis_calibration_area=True,
     ):
@@ -459,9 +459,12 @@ class Accuracy_Visualizer(Plugin):
         )
 
         # Good values are close to 1. since cos(0) == 1.
-        # Therefore we look for values greater than cos(outlier_threshold)
         selected_indices = angular_err > np.cos(np.deg2rad(outlier_threshold))
         selected_samples = angular_err[selected_indices]
+        if selected_samples.shape[0] == 0:
+            selected_indices = np.ones_like(angular_err, dtype=bool)
+            selected_samples = angular_err
+
         num_used, num_total = selected_samples.shape[0], angular_err.shape[0]
 
         error_lines = error_lines[selected_indices].reshape(
