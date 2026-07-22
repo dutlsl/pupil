@@ -146,3 +146,23 @@ _FIXED_MARKER_POSITION = (0.5, 0.5)  # 화면 중앙 고정 마커 좌표
 ```python
 cx, cy = width // 2, height // 2  # 가상 생성 동공 타겟 좌표
 ```
+
+### 7.4 Accuracy Visualizer Outlier Threshold 기본값 수정 매뉴얼
+Accuracy Visualizer(시선 측정 정확도 시각화) 플러그인이 실행될 때 적용되는 이상치 각도 차단 기준값(Outlier Threshold [degrees])의 기본값 설정 방법입니다.
+
+- **파일 경로**: [pupil_src/shared_modules/accuracy_visualizer.py](file:///home/byeongjun/PycharmProjects/pupil/pupil_src/shared_modules/accuracy_visualizer.py#L178-L185)
+- **클래스 및 함수 위치**: `Accuracy_Visualizer.__init__` (Line 181)
+
+```python
+class Accuracy_Visualizer(Plugin):
+    def __init__(
+        self,
+        g_pool,
+        outlier_threshold=1.5,  # Outlier Threshold 디폴트값 (기본 1.5도)
+        vis_mapping_error=True,
+        vis_calibration_area=True,
+    ):
+```
+
+- **수정 가이드**:
+  - 테스트(Validation) 실행 시 자동으로 초기화되는 Outlier Threshold 기본값을 변경하려면 `outlier_threshold=1.5` 기본 매개변수의 숫자값을 원하는 값(예: `1.0`, `2.0` 등)으로 직접 변경하시면 됩니다.
