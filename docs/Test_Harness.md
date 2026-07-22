@@ -113,18 +113,22 @@ Pupil Core 스마트 글래스의 광학 거울 반사 구조상 Eye 0 카메라
 사용자 시선 교정(Calibration) 및 검증(Validation/Accuracy Test) 시 표시되는 타겟 포인트 좌표는 코드 상에 아래 위치에 정의되어 있습니다.
 
 ### 7.1 화면 마커 캘리브레이션 및 검증 타겟 좌표 (Screen Marker)
-- **파일 경로**: [pupil_src/shared_modules/calibration_choreography/screen_marker_plugin.py](file:///home/byeongjun/PycharmProjects/pupil/pupil_src/shared_modules/calibration_choreography/screen_marker_plugin.py#L71-L81)
-- **메서드 위치**: `ScreenMarkerChoreographyPlugin.get_list_of_markers_to_show(mode)` (Lines 71~81)
+- **파일 경로**: [pupil_src/shared_modules/calibration_choreography/screen_marker_plugin.py](file:///home/byeongjun/PycharmProjects/pupil/pupil_src/shared_modules/calibration_choreography/screen_marker_plugin.py#L71-L82)
+- **메서드 위치**: `ScreenMarkerChoreographyPlugin.get_list_of_markers_to_show(mode)` (Lines 71~82)
 
 ```python
 @staticmethod
 def get_list_of_markers_to_show(mode: ChoreographyMode) -> list:
     if ChoreographyMode.CALIBRATION == mode:
-        # 캘리브레이션 타겟 좌표 목록 [ (x, y), ... ] (0.0 ~ 1.0 정규화 비율)
-        return [(0.5, 0.5), (0.0, 1.0), (1.0, 1.0), (1.0, 0.0), (0.0, 0.0)]
+        # 캘리브레이션 3x3 Grid (1..9 순서: 좌상단 -> 우하단)
+        return [
+            (0.0, 1.0), (0.5, 1.0), (1.0, 1.0),  # 1, 2, 3 (상단 행)
+            (0.0, 0.5), (0.5, 0.5), (1.0, 0.5),  # 4, 5, 6 (중단 행)
+            (0.0, 0.0), (0.5, 0.0), (1.0, 0.0),  # 7, 8, 9 (하단 행)
+        ]
     if ChoreographyMode.VALIDATION == mode:
-        # 검증(Validation / Accuracy Test) 타겟 좌표 목록
-        return [(0.0, 1.0), (1.0, 1.0), (1.0, 0.0), (0.0, 0.0)]
+        # 검증(Validation / Accuracy Test) 타겟: (0.5, 0.5) 중앙 4회 연속 표시
+        return [(0.5, 0.5), (0.5, 0.5), (0.5, 0.5), (0.5, 0.5)]
 ```
 - **수정 가이드**:
   - 화면 정중앙 및 4개 모서리(5-point) 외에 9-point 패턴이나 커스텀 좌표로 수정하려면 해당 리스트 `[(x1, y1), (x2, y2), ...]`의 튜플 항목을 직접 편집합니다.

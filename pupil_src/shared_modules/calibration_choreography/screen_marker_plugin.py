@@ -71,13 +71,15 @@ class ScreenMarkerChoreographyPlugin(
     @staticmethod
     def get_list_of_markers_to_show(mode: ChoreographyMode) -> list:
         if ChoreographyMode.CALIBRATION == mode:
-            return [(0.5, 0.5), (0.0, 1.0), (1.0, 1.0), (1.0, 0.0), (0.0, 0.0)]
-            # return [(0.5, 0.5), (0.5, 1.0), (1.0, 0.5), (0.5, 0.0), (0.0, 0.5)]
+            # 3x3 Grid (1..9 in order: top-left to bottom-right)
+            return [
+                (0.0, 1.0), (0.5, 1.0), (1.0, 1.0),  # 1, 2, 3 (Top row)
+                (0.0, 0.5), (0.5, 0.5), (1.0, 0.5),  # 4, 5, 6 (Middle row)
+                (0.0, 0.0), (0.5, 0.0), (1.0, 0.0),  # 7, 8, 9 (Bottom row)
+            ]
         if ChoreographyMode.VALIDATION == mode:
-            # return [(0.5, 1.0), (1.0, 0.5), (0.5, 0.0), (0.0, 0.5)]
-            #return [(0.5, 0.8), (0.8, 0.5), (0.5, 0.2), (0.2, 0.5), (0.5, 0.5)]
-            # return [(0.2, 0.8), (0.8, 0.8), (0.8, 0.2), (0.2, 0.2)]
-            return [(0.0, 1.0), (1.0, 1.0), (1.0, 0.0), (0.0, 0.0)]
+            # (0.5, 0.5) center target 4 times
+            return [(0.5, 0.5), (0.5, 0.5), (0.5, 0.5), (0.5, 0.5)]
         raise ValueError(f"Unknown mode {mode}")
 
     def __init__(
