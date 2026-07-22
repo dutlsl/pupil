@@ -36,8 +36,15 @@ from plugin import Plugin
 from . import color_scheme
 from .detector_base_plugin import PupilDetectorPlugin
 from .visualizer_2d import draw_pupil_outline
-from pupil_detector_plugins import deepvog
-from pupil_detector_plugins import edgaze
+try:
+    from pupil_detector_plugins import deepvog
+except Exception:
+    deepvog = None
+
+try:
+    from pupil_detector_plugins import edgaze
+except Exception:
+    edgaze = None
 from draw_ellipse import fit_ellipse
 from CheckEllipse import computeEllipseConfidence
 from pupil_detector_plugins.utils import get_predictions
@@ -46,11 +53,17 @@ import torchvision
 
 # Dynamic setup for nnUNet paths
 NNUNET_DIR = os.path.expanduser("~/PycharmProjects/nnUNet")
+NNUNET_LEGACY_DIR = os.path.expanduser("~/PycharmProjects/nnUNet_legacy")
 NNUNET_AGENT_DIR = os.path.join(NNUNET_DIR, "agent")
-if NNUNET_DIR not in sys.path:
-    sys.path.insert(0, NNUNET_DIR)
-if NNUNET_AGENT_DIR not in sys.path:
-    sys.path.insert(0, NNUNET_AGENT_DIR)
+
+for p in [NNUNET_LEGACY_DIR, NNUNET_DIR, NNUNET_AGENT_DIR]:
+    if os.path.exists(p) and p not in sys.path:
+        sys.path.insert(0, p)
+
+if "numpy._core" not in sys.modules and hasattr(np, "core"):
+    sys.modules["numpy._core"] = np.core
+    if hasattr(np.core, "multiarray"):
+        sys.modules["numpy._core.multiarray"] = np.core.multiarray
 
 PUPIL_CLASS_ID = 3  # OpenEDS labels: background=0, sclera=1, iris=2, pupil=3
 MEAN_VAL = 86.45
