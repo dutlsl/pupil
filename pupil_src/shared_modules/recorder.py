@@ -11,10 +11,12 @@ See COPYING and COPYING.LESSER for license details.
 import errno
 import glob
 import logging
+import multiprocessing
 import os
 import uuid
+from queue import Empty
 from shutil import copy2
-from time import gmtime, localtime, strftime, time
+from time import gmtime, localtime, monotonic, strftime, time
 
 import csv_utils
 import psutil
@@ -35,6 +37,316 @@ from pyglui import ui
 from video_capture.ndsi_backend import NDSI_Source
 
 logger = logging.getLogger(__name__)
+
+
+ENABLE_POINT_SEQUENCE = True
+# POINT_SEQUENCE_MODE = "smooth_rieul"  # "smooth_rieul" or "discrete_keypad"
+POINT_SEQUENCE_MODE = "discrete_keypad"  # "smooth_rieul" or "discrete_keypad"
+POINT_DISPLAY_INTERVAL_SEC = 1.0
+SMOOTH_RIEUL_DURATION_SEC = 10.0
+POINT_ANIMATION_FPS = 60.0
+POINT_RADIUS = 25
+TARGET_SCREEN_WIDTH = 2560
+TARGET_SCREEN_HEIGHT = 1440
+DISPLAY_POINTS = [
+    (154, 122),
+    (1280, 122),
+    (2406, 122),
+    (154, 720),
+    (1280, 720),
+    (2406, 720),
+    (154, 1318),
+    (1280, 1318),
+    (2406, 1318),
+]
+RIEUL_DISPLAY_POINTS = [
+    (154, 122),  # 7
+    (1280, 122),  # 8
+    (2406, 122),  # 9
+    (2406, 720),  # 6
+    (1280, 720),  # 5
+    (154, 720),  # 4
+    (154, 1318),  # 1
+    (1280, 1318),  # 2
+    (2406, 1318),  # 3
+]
+
+
+def run_point_overlay(
+    points,
+    mode,
+    interval_sec,
+    smooth_duration_sec,
+    animation_fps,
+    radius,
+    stop_event,
+    log_queue,
+):
+    """Display a sequence of targets in a dedicated process."""
+
+    def overlay_log(level, message):
+        try:
+            log_queue.put((level, message))
+        except Exception:
+            getattr(logger, level)(message)
+
+    window = None
+    glfw_initialized = False
+    try:
+        import math
+
+        import glfw
+        from OpenGL.GL import (
+            GL_BLEND,
+            GL_COLOR_BUFFER_BIT,
+            GL_LINES,
+            GL_MODELVIEW,
+            GL_ONE_MINUS_SRC_ALPHA,
+            GL_PROJECTION,
+            GL_SRC_ALPHA,
+            GL_TRIANGLE_FAN,
+            glBegin,
+            glBlendFunc,
+            glClear,
+            glClearColor,
+            glColor4f,
+            glEnable,
+            glEnd,
+            glLineWidth,
+            glLoadIdentity,
+            glMatrixMode,
+            glOrtho,
+            glVertex2f,
+            glViewport,
+        )
+
+        if not glfw.init():
+            raise RuntimeError("GLFW initialization failed")
+        glfw_initialized = True
+
+        monitor = glfw.get_primary_monitor()
+        video_mode = glfw.get_video_mode(monitor) if monitor else None
+        if monitor is None or video_mode is None:
+            raise RuntimeError("Could not determine the primary screen resolution")
+
+        screen_width = video_mode.size.width
+        screen_height = video_mode.size.height
+        monitor_x, monitor_y = glfw.get_monitor_pos(monitor)
+        if (screen_width, screen_height) != (
+            TARGET_SCREEN_WIDTH,
+            TARGET_SCREEN_HEIGHT,
+        ):
+            overlay_log(
+                "warning",
+                "Screen resolution is %dx%d; expected %dx%d. Display scaling and "
+                "multi-monitor layouts may also affect global screen coordinates."
+                % (
+                    screen_width,
+                    screen_height,
+                    TARGET_SCREEN_WIDTH,
+                    TARGET_SCREEN_HEIGHT,
+                ),
+            )
+
+        # GLFW window positions use global screen coordinates. Display scaling and
+        # multi-monitor layouts can make these differ from physical pixel coordinates.
+        glfw.window_hint(glfw.DECORATED, glfw.FALSE)
+        glfw.window_hint(glfw.FLOATING, glfw.TRUE)
+        glfw.window_hint(glfw.FOCUS_ON_SHOW, glfw.FALSE)
+        glfw.window_hint(glfw.VISIBLE, glfw.FALSE)
+        if hasattr(glfw, "MOUSE_PASSTHROUGH"):
+            glfw.window_hint(glfw.MOUSE_PASSTHROUGH, glfw.TRUE)
+
+        window = glfw.create_window(
+            screen_width, screen_height, "Point overlay", None, None
+        )
+        if window is None:
+            raise RuntimeError("Could not create the point overlay window")
+
+        if hasattr(glfw, "MOUSE_PASSTHROUGH"):
+            glfw.set_window_attrib(window, glfw.MOUSE_PASSTHROUGH, glfw.TRUE)
+        glfw.make_context_current(window)
+        glfw.swap_interval(0)
+        glfw.set_window_pos(window, monitor_x, monitor_y)
+
+        framebuffer_width, framebuffer_height = glfw.get_framebuffer_size(window)
+        scale_x = framebuffer_width / screen_width
+        scale_y = framebuffer_height / screen_height
+        draw_radius = radius * min(scale_x, scale_y)
+
+        def draw_target(point_x, point_y):
+            center_x = point_x * scale_x
+            # OpenGL's origin is at the bottom left, while display points use the
+            # top-left corner of the primary monitor as (0, 0).
+            center_y = framebuffer_height - point_y * scale_y
+            glViewport(0, 0, framebuffer_width, framebuffer_height)
+            glMatrixMode(GL_PROJECTION)
+            glLoadIdentity()
+            glOrtho(0, framebuffer_width, 0, framebuffer_height, -1, 1)
+            glMatrixMode(GL_MODELVIEW)
+            glLoadIdentity()
+            glClearColor(1.0, 1.0, 1.0, 1.0)
+            glClear(GL_COLOR_BUFFER_BIT)
+            glEnable(GL_BLEND)
+            glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA)
+
+            glColor4f(1.0, 0.1, 0.1, 0.95)
+            glBegin(GL_TRIANGLE_FAN)
+            glVertex2f(center_x, center_y)
+            for segment in range(65):
+                angle = 2.0 * math.pi * segment / 64
+                glVertex2f(
+                    center_x + math.cos(angle) * draw_radius,
+                    center_y + math.sin(angle) * draw_radius,
+                )
+            glEnd()
+
+            cross_radius = max(5.0, draw_radius * 0.4)
+            glColor4f(0.0, 0.0, 0.0, 1.0)
+            glLineWidth(max(2.0, 3.0 * min(scale_x, scale_y)))
+            glBegin(GL_LINES)
+            glVertex2f(center_x - cross_radius, center_y)
+            glVertex2f(center_x + cross_radius, center_y)
+            glVertex2f(center_x, center_y - cross_radius)
+            glVertex2f(center_x, center_y + cross_radius)
+            glEnd()
+
+        def wait_until(deadline):
+            while not stop_event.is_set():
+                remaining = deadline - monotonic()
+                if remaining <= 0:
+                    return True
+                glfw.wait_events_timeout(min(remaining, 0.05))
+                if glfw.window_should_close(window):
+                    return False
+            return False
+
+        def present_target(point_x, point_y):
+            nonlocal window_shown
+            draw_target(point_x, point_y)
+            glfw.swap_buffers(window)
+            if not window_shown:
+                glfw.show_window(window)
+                window_shown = True
+
+        overlay_log("info", "Point sequence started")
+        point_count = len(points)
+        valid_points = []
+        for point_index, point in enumerate(points, start=1):
+            point_x, point_y = point
+            if not (0 <= point_x < screen_width and 0 <= point_y < screen_height):
+                overlay_log(
+                    "warning",
+                    "Point is outside the screen bounds: (%d, %d)" % (point_x, point_y),
+                )
+                continue
+            valid_points.append((point_index, point))
+
+        window_shown = False
+        if mode == "discrete_keypad":
+            for point_index, (point_x, point_y) in valid_points:
+                if stop_event.is_set():
+                    return
+                present_target(point_x, point_y)
+                overlay_log(
+                    "info",
+                    "Displaying point %d/%d: (%d, %d)"
+                    % (point_index, point_count, point_x, point_y),
+                )
+                if not wait_until(monotonic() + interval_sec):
+                    return
+        elif mode == "smooth_rieul":
+            if len(valid_points) < 2:
+                raise RuntimeError(
+                    "Smooth rieul mode requires at least two points on the screen"
+                )
+
+            path_points = [point for _, point in valid_points]
+            cumulative_distances = [0.0]
+            for start_point, end_point in zip(path_points, path_points[1:]):
+                segment_length = math.hypot(
+                    end_point[0] - start_point[0],
+                    end_point[1] - start_point[1],
+                )
+                cumulative_distances.append(
+                    cumulative_distances[-1] + segment_length
+                )
+            total_distance = cumulative_distances[-1]
+            if total_distance <= 0:
+                raise RuntimeError("Smooth rieul path has no length")
+
+            overlay_log(
+                "info",
+                "Following smooth rieul path for %.1f seconds" % smooth_duration_sec,
+            )
+            animation_start = monotonic()
+            segment_index = 0
+            next_waypoint_log_index = 0
+            frame_index = 0
+            while not stop_event.is_set():
+                elapsed = min(monotonic() - animation_start, smooth_duration_sec)
+                distance = total_distance * elapsed / smooth_duration_sec
+
+                while (
+                    segment_index < len(path_points) - 2
+                    and distance >= cumulative_distances[segment_index + 1]
+                ):
+                    segment_index += 1
+
+                segment_start_distance = cumulative_distances[segment_index]
+                segment_length = (
+                    cumulative_distances[segment_index + 1]
+                    - segment_start_distance
+                )
+                segment_progress = (
+                    distance - segment_start_distance
+                ) / segment_length
+                start_x, start_y = path_points[segment_index]
+                end_x, end_y = path_points[segment_index + 1]
+                point_x = start_x + (end_x - start_x) * segment_progress
+                point_y = start_y + (end_y - start_y) * segment_progress
+                present_target(point_x, point_y)
+
+                while (
+                    next_waypoint_log_index < len(valid_points)
+                    and distance
+                    >= cumulative_distances[next_waypoint_log_index]
+                ):
+                    original_index, waypoint = valid_points[next_waypoint_log_index]
+                    overlay_log(
+                        "info",
+                        "Displaying point %d/%d: (%d, %d)"
+                        % (original_index, point_count, waypoint[0], waypoint[1]),
+                    )
+                    next_waypoint_log_index += 1
+
+                if elapsed >= smooth_duration_sec:
+                    break
+                frame_index += 1
+                next_frame_time = animation_start + min(
+                    frame_index / animation_fps, smooth_duration_sec
+                )
+                if not wait_until(next_frame_time):
+                    return
+        else:
+            raise RuntimeError("Unknown point sequence mode: %s" % mode)
+
+        if not stop_event.is_set():
+            overlay_log("info", "Point sequence completed")
+            log_queue.put(("sequence_completed", None))
+    except Exception as error:
+        overlay_log("error", "Failed to start point overlay: %s" % error)
+        raise
+    finally:
+        if window is not None:
+            glfw.destroy_window(window)
+        if glfw_initialized:
+            glfw.terminate()
+        try:
+            log_queue.close()
+            log_queue.join_thread()
+        except Exception:
+            pass
 
 
 def get_auto_name():
@@ -75,6 +387,9 @@ class Recorder(System_Plugin_Base):
         base_dir = self.g_pool.user_dir.rsplit(os.path.sep, 1)[0]
         default_rec_root_dir = os.path.join(base_dir, "recordings")
 
+        logger.warning("g_pool.user_dir = %s", self.g_pool.user_dir)
+        logger.warning("default recording dir = %s", default_rec_root_dir)
+
         if (
             rec_root_dir
             and rec_root_dir != default_rec_root_dir
@@ -100,6 +415,10 @@ class Recorder(System_Plugin_Base):
         self.running = False
         self.menu = None
         self.button = None
+        self.point_sequence_process = None
+        self.point_sequence_stop_event = None
+        self.point_sequence_log_queue = None
+        self.point_sequence_should_stop_recording = False
 
         self.user_info = user_info
         self.show_info_menu = show_info_menu
@@ -330,9 +649,31 @@ class Recorder(System_Plugin_Base):
         recording_uuid = uuid.uuid4()
 
         # set up self incrementing folder within session folder
+        point_sequence_mode = (
+            POINT_SEQUENCE_MODE if ENABLE_POINT_SEQUENCE else "disabled"
+        )
+        point_sequence_mode = "".join(
+            character
+            if character.isalnum() or character in ("-", "_")
+            else "_"
+            for character in point_sequence_mode
+        )
+        if not point_sequence_mode:
+            point_sequence_mode = "unknown"
+
         counter = 0
         while True:
-            self.rec_path = os.path.join(session, f"{counter:03d}/")
+            recording_number = f"{counter:03d}"
+            if glob.glob(os.path.join(session, f"{recording_number}*")):
+                logger.debug(
+                    "Recording number %s already exists, incrementing counter",
+                    recording_number,
+                )
+                counter += 1
+                continue
+
+            recording_dir_name = f"{recording_number}_{point_sequence_mode}"
+            self.rec_path = os.path.join(session, recording_dir_name, "")
             try:
                 os.mkdir(self.rec_path)
                 logger.debug(f"Created new recording dir {self.rec_path}")
@@ -409,6 +750,101 @@ class Recorder(System_Plugin_Base):
                 "start_time_synced": float(start_time_synced),
             }
         )
+        self.start_point_sequence()
+
+    def _drain_point_sequence_logs(self):
+        if self.point_sequence_log_queue is None:
+            return
+        while True:
+            try:
+                level, message = self.point_sequence_log_queue.get_nowait()
+            except Empty:
+                break
+            except (EOFError, OSError, ValueError):
+                break
+            if level == "sequence_completed":
+                self.point_sequence_should_stop_recording = True
+                continue
+            getattr(logger, level, logger.info)(message)
+
+    def _clear_point_sequence_resources(self):
+        self._drain_point_sequence_logs()
+        if (
+            self.point_sequence_process is not None
+            and self.point_sequence_process.pid is not None
+        ):
+            self.point_sequence_process.join(timeout=0)
+        if self.point_sequence_log_queue is not None:
+            self.point_sequence_log_queue.close()
+            self.point_sequence_log_queue.join_thread()
+        self.point_sequence_process = None
+        self.point_sequence_stop_event = None
+        self.point_sequence_log_queue = None
+
+    def _update_point_sequence_state(self):
+        self._drain_point_sequence_logs()
+        process = self.point_sequence_process
+        if process is None or process.is_alive():
+            return
+        exitcode = process.exitcode
+        self._clear_point_sequence_resources()
+        if exitcode != 0:
+            logger.error("Point overlay process terminated unexpectedly")
+
+    def start_point_sequence(self):
+        if not ENABLE_POINT_SEQUENCE:
+            return
+
+        self.point_sequence_should_stop_recording = False
+        self._update_point_sequence_state()
+        if (
+            self.point_sequence_process is not None
+            and self.point_sequence_process.is_alive()
+        ):
+            return
+
+        try:
+            context = multiprocessing.get_context()
+            self.point_sequence_stop_event = context.Event()
+            self.point_sequence_log_queue = context.Queue()
+            self.point_sequence_process = context.Process(
+                name="Point Overlay",
+                target=run_point_overlay,
+                args=(
+                    (
+                        RIEUL_DISPLAY_POINTS
+                        if POINT_SEQUENCE_MODE == "smooth_rieul"
+                        else DISPLAY_POINTS
+                    ),
+                    POINT_SEQUENCE_MODE,
+                    POINT_DISPLAY_INTERVAL_SEC,
+                    SMOOTH_RIEUL_DURATION_SEC,
+                    POINT_ANIMATION_FPS,
+                    POINT_RADIUS,
+                    self.point_sequence_stop_event,
+                    self.point_sequence_log_queue,
+                ),
+            )
+            self.point_sequence_process.daemon = True
+            self.point_sequence_process.start()
+        except Exception as error:
+            logger.error("Failed to start point overlay: %s", error)
+            self._clear_point_sequence_resources()
+
+    def stop_point_sequence(self):
+        process = self.point_sequence_process
+        if process is None:
+            self.point_sequence_should_stop_recording = False
+            return
+
+        if self.point_sequence_stop_event is not None:
+            self.point_sequence_stop_event.set()
+        process.join(timeout=0.5)
+        if process.is_alive():
+            process.terminate()
+            process.join(timeout=1.0)
+        self._clear_point_sequence_resources()
+        self.point_sequence_should_stop_recording = False
 
     def open_info_menu(self):
         self.info_menu = ui.Growing_Menu(
@@ -443,6 +879,11 @@ class Recorder(System_Plugin_Base):
             self.info_menu = None
 
     def recent_events(self, events):
+        self._update_point_sequence_state()
+        if self.running and self.point_sequence_should_stop_recording:
+            self.point_sequence_should_stop_recording = False
+            self.toggle()
+
         if self.check_space():
             disk_space = available_gb(self.rec_root_dir)
             if (
@@ -489,6 +930,7 @@ class Recorder(System_Plugin_Base):
             self.button.status_text = self.get_rec_time_str()
 
     def stop(self):
+        self.stop_point_sequence()
         duration_s = self.g_pool.get_timestamp() - self.meta_info.start_time_synced_s
 
         if self.record_world:
@@ -545,6 +987,8 @@ class Recorder(System_Plugin_Base):
         """
         if self.running:
             self.stop()
+        else:
+            self.stop_point_sequence()
 
     def verify_path(self, val):
         try:

@@ -117,7 +117,7 @@ class Detector2DPlugin(PupilDetectorPlugin):
         self.show_comparison = False
         self.flip_vertically = False
         self.flip_horizontally = False
-        self.active_model = "TransUNet"
+        self.active_model = "RITnet"
 
         # --- Phase 1 optimizations ---
         # 1-B: Reuse CLAHE object (avoid re-creation every frame)
