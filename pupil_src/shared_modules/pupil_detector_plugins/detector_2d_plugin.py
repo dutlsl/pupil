@@ -358,8 +358,8 @@ class Detector2DPlugin(PupilDetectorPlugin):
         area_ratio = min(area, ellipse_area) / (max(area, ellipse_area) + 1e-6)
         aspect_ratio = min(MA, ma) / (max(MA, ma) + 1e-6)
 
-        # Half-blink rejection filter
-        if aspect_ratio < 0.65:
+        # Blink rejection filter for extreme collapses (allow valid perspective-flattened pupils down to 0.2)
+        if aspect_ratio < 0.2:
             self._prev_center = None
             return self._empty_datum(frame)
 
@@ -371,7 +371,7 @@ class Detector2DPlugin(PupilDetectorPlugin):
         # Temporal EMA smoothing & jump rejection
         if self._prev_center is not None:
             dist = np.sqrt((cx - self._prev_center[0]) ** 2 + (cy - self._prev_center[1]) ** 2)
-            if dist > 40.0:
+            if dist > 120.0:
                 self._consecutive_jumps += 1
                 if self._consecutive_jumps < 5:
                     confidence = 0.0
