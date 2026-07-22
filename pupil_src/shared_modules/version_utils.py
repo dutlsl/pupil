@@ -39,7 +39,10 @@ def get_tag_commit() -> T.Optional[str]:
 ParsedVersion = T.Union[packaging.version.Version]
 
 def parse_version(vstring: str) -> ParsedVersion:
-    return packaging.version.parse(vstring)
+    try:
+        return packaging.version.parse(vstring)
+    except Exception:
+        return packaging.version.parse("3.6.0")
 
 
 def pupil_version() -> ParsedVersion:
@@ -55,21 +58,26 @@ def pupil_version_string() -> str:
     # version (without git).
     version = get_tag_commit()
     if version is None:
-        raise ValueError("Version Error")
+        return "3.6.0"
 
+    version_parsed = None
     try:
         parts_git_tag = version.split("-")
         version_parsed = packaging.version.Version(parts_git_tag[0])
         if version_parsed.is_prerelease:
             version = version_parsed.base_version
-    except packaging.version.InvalidVersion:
-        pass
+    except Exception:
+        version_parsed = None
+
+    if version_parsed is None:
+        # Custom non-PEP440 git tag (e.g. v-nnunet-init)
+        return "3.6.0"
+
     version = version.replace("v", "")  # strip version 'v'
-    # print(version)
     if "-" in version:
         parts = version.split("-")
         version = ".".join(parts[:-1])
-    if version_parsed.is_prerelease:
+    if version_parsed is not None and getattr(version_parsed, "is_prerelease", False):
         version += "".join(map(str, version_parsed.pre))
     return version
 
