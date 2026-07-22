@@ -104,7 +104,7 @@ class SingleMarkerChoreographyPlugin(
         g_pool,
         marker_mode=None,
         marker_scale=1.0,
-        sample_duration=40,
+        sample_duration=60,
         monitor_name=None,
         **kwargs,
     ):

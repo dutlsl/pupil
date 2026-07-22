@@ -87,7 +87,7 @@ class ScreenMarkerChoreographyPlugin(
         g_pool,
         fullscreen=True,
         marker_scale=1.0,
-        sample_duration=40,
+        sample_duration=60,
         monitor_name=None,
         **kwargs,
     ):
@@ -115,6 +115,7 @@ class ScreenMarkerChoreographyPlugin(
         d["fullscreen"] = self.is_fullscreen
         d["marker_scale"] = self.__marker_window.marker_scale
         d["monitor_name"] = self.selected_monitor_name
+        d["sample_duration"] = self.sample_duration
         return d
 
     ### Public - Plugin

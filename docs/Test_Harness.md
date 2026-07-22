@@ -166,3 +166,25 @@ class Accuracy_Visualizer(Plugin):
 
 - **수정 가이드**:
   - 테스트(Validation) 실행 시 자동으로 초기화되는 Outlier Threshold 기본값을 변경하려면 `outlier_threshold=1.3` 기본 매개변수의 숫자값을 원하는 값(예: `1.0`, `2.0` 등)으로 직접 변경하시면 됩니다.
+
+### 7.5 Sample Duration (샘플 수집 프레임 수) 기본값 수정 매뉴얼
+각 캘리브레이션/검증 마커 지점에서 멈춰서 안구 데이터를 샘플링하는 duration(프레임 수 단위)의 기본값 설정 방법입니다.
+
+- **파일 경로 1**: [pupil_src/shared_modules/calibration_choreography/screen_marker_plugin.py](file:///home/byeongjun/PycharmProjects/pupil/pupil_src/shared_modules/calibration_choreography/screen_marker_plugin.py#L85-L95)
+- **파일 경로 2**: [pupil_src/shared_modules/calibration_choreography/single_marker_plugin.py](file:///home/byeongjun/PycharmProjects/pupil/pupil_src/shared_modules/calibration_choreography/single_marker_plugin.py#L102-L110)
+- **클래스 및 함수 위치**: `ScreenMarkerChoreographyPlugin.__init__` / `SingleMarkerChoreographyPlugin.__init__`
+
+```python
+    def __init__(
+        self,
+        g_pool,
+        fullscreen=True,
+        marker_scale=1.0,
+        sample_duration=60,  # Sample Duration 디폴트값 (기본 60프레임)
+        monitor_name=None,
+        **kwargs,
+    ):
+```
+
+- **수정 가이드**:
+  - 마커 1개당 샘플링할 데이터 프레임 수 기본값을 변경하려면 `sample_duration=60` 인자값을 원하는 수치(예: `40`, `80` 등)로 변경하시면 됩니다. (UI 내 Slider를 통해서도 10~100 범위 조작 가능)
