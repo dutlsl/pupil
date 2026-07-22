@@ -407,6 +407,10 @@ class Detector2DPlugin(PupilDetectorPlugin):
         datum["ellipse"] = result["ellipse"]
         return datum
 
+    def detect_RITnet(self, frame, **kwargs):
+        """Backward compatibility alias for _detect_ritnet."""
+        return self._detect_ritnet(frame, **kwargs)
+
     def _detect_ritnet(self, frame, **kwargs):
         gray = frame.gray
         if gray is None or self.ritnet_model is None:
