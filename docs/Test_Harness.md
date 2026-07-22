@@ -1,14 +1,5 @@
 # Pupil Labs 딥러닝 동공 디텍터 사용자 가이드 및 실행 매뉴얼 (User Guide & Harness Manual)
 
-(pupil-umamba) byeongjun@server3:~/PycharmProjects/pupil$ cd ~/PycharmProjects/pupil/pupil_src && python main.py
-Traceback (most recent call last):
-  File "/home/byeongjun/PycharmProjects/pupil/pupil_src/main.py", line 39, in <module>
-    app_version = get_version()
-  File "/home/byeongjun/PycharmProjects/pupil/pupil_src/shared_modules/version_utils.py", line 84, in get_version
-    version_string = pupil_version_string()
-  File "/home/byeongjun/PycharmProjects/pupil/pupil_src/shared_modules/version_utils.py", line 72, in pupil_version_string
-    if version_parsed.is_prerelease:
-UnboundLocalError: local variable 'version_parsed' referenced before assignment
 
 본 문서는 **Pupil Labs 딥러닝 동공 디텍터 모듈(`Detector2DPlugin`)의 실행 환경, GUI 조작법, 오프라인 검증 및 사용법을 정리한 유저 매뉴얼**입니다.
 

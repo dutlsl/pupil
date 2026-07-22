@@ -179,10 +179,17 @@ class Detector2DPlugin(PupilDetectorPlugin):
             current_dir = os.path.dirname(os.path.abspath(__file__))
             pupil_src_dir = os.path.abspath(os.path.join(current_dir, "..", ".."))
             model_path = os.path.join(pupil_src_dir, "best_model.pkl")
+            alt_path = os.path.join(current_dir, "best_model.pkl")
 
-            if model_name in model_dict and os.path.exists(model_path):
+            path_to_load = model_path if os.path.exists(model_path) else alt_path
+
+            if model_name in model_dict and os.path.exists(path_to_load):
                 self.ritnet_model = model_dict[model_name]().to(self.device)
-                self.ritnet_model.load_state_dict(torch.load(model_path, map_location=self.device, weights_only=False))
+                try:
+                    self.ritnet_model.load_state_dict(torch.load(path_to_load, map_location=self.device, weights_only=False))
+                except Exception:
+                    if os.path.exists(alt_path):
+                        self.ritnet_model.load_state_dict(torch.load(alt_path, map_location=self.device, weights_only=False))
                 self.ritnet_model.eval()
                 logger.info("RITnet model initialized successfully as fallback.")
             else:

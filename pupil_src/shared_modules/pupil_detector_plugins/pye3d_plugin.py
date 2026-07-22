@@ -103,12 +103,20 @@ class Pye3DPlugin(PupilDetectorPlugin):
             raise ValueError("Invalid model name.")
 
         if not os.path.exists(model_path):
-            logger.error(f"Model path {model_path} not found!")
-            raise FileNotFoundError(model_path)
+            alt_path = os.path.join(current_dir, "best_model.pkl")
+            if os.path.exists(alt_path):
+                model_path = alt_path
 
-        # self.model = model_dict[model_name].to(self.device)
         self.model = model_dict[model_name]().to(self.device)
-        self.model.load_state_dict(torch.load(model_path))
+        try:
+            self.model.load_state_dict(torch.load(model_path, map_location=self.device, weights_only=False))
+        except Exception as e:
+            alt_path = os.path.join(current_dir, "best_model.pkl")
+            if os.path.exists(alt_path) and alt_path != model_path:
+                logger.warning(f"Failed loading {model_path}, trying {alt_path}: {e}")
+                self.model.load_state_dict(torch.load(alt_path, map_location=self.device, weights_only=False))
+            else:
+                logger.warning(f"Pye3D model load error: {e}")
         self.model.eval()
 
         self.transform = torchvision.transforms.Compose(
