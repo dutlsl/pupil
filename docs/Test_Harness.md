@@ -1,7 +1,6 @@
 # Pupil Labs 딥러닝 동공 디텍터 사용자 가이드 및 실행 매뉴얼 (User Guide & Harness Manual)
 
-
-본 문서는 **Pupil Labs 딥러닝 동공 디텍터 모듈(`Detector2DPlugin`)의 실행 환경, GUI 조작법, 오프라인 검증 및 사용법을 정리한 유저 매뉴얼**입니다.
+본 문서는 **Pupil Labs 딥러닝 동공 디텍터 모듈(`Detector2DPlugin`)의 실행 환경, GUI 조작법, 오프라인 검증, 트러블슈팅 및 캘리브레이션/검증 타겟 좌표 설정법을 정리한 유저 매뉴얼**입니다.
 
 ---
 
@@ -106,3 +105,40 @@ Pupil Core 스마트 글래스의 광학 거울 반사 구조상 Eye 0 카메라
    - `conda activate pupil-umamba` 가상환경이 켜져 있는지 확인.
 3. **카메라 입력이 찌그러지거나 동공이 튀는 현상**:
    - UI에서 `Flip Vertically`가 올바르게 켜져 있는지, `Active Model`이 `TemporalUNet`으로 설정되어 있는지 확인.
+
+---
+
+## 7. 🎯 캘리브레이션 및 검증(Test Validation) 타겟 좌표 설정 매뉴얼
+
+사용자 시선 교정(Calibration) 및 검증(Validation/Accuracy Test) 시 표시되는 타겟 포인트 좌표는 코드 상에 아래 위치에 정의되어 있습니다.
+
+### 7.1 화면 마커 캘리브레이션 및 검증 타겟 좌표 (Screen Marker)
+- **파일 경로**: [pupil_src/shared_modules/calibration_choreography/screen_marker_plugin.py](file:///home/byeongjun/PycharmProjects/pupil/pupil_src/shared_modules/calibration_choreography/screen_marker_plugin.py#L71-L81)
+- **메서드 위치**: `ScreenMarkerChoreographyPlugin.get_list_of_markers_to_show(mode)` (Lines 71~81)
+
+```python
+@staticmethod
+def get_list_of_markers_to_show(mode: ChoreographyMode) -> list:
+    if ChoreographyMode.CALIBRATION == mode:
+        # 캘리브레이션 타겟 좌표 목록 [ (x, y), ... ] (0.0 ~ 1.0 정규화 비율)
+        return [(0.5, 0.5), (0.0, 1.0), (1.0, 1.0), (1.0, 0.0), (0.0, 0.0)]
+    if ChoreographyMode.VALIDATION == mode:
+        # 검증(Validation / Accuracy Test) 타겟 좌표 목록
+        return [(0.0, 1.0), (1.0, 1.0), (1.0, 0.0), (0.0, 0.0)]
+```
+- **수정 가이드**:
+  - 화면 정중앙 및 4개 모서리(5-point) 외에 9-point 패턴이나 커스텀 좌표로 수정하려면 해당 리스트 `[(x1, y1), (x2, y2), ...]`의 튜플 항목을 직접 편집합니다.
+
+### 7.2 단일 마커 캘리브레이션 고정 좌표 (Single Marker)
+- **파일 경로**: [pupil_src/shared_modules/calibration_choreography/single_marker_plugin.py](file:///home/byeongjun/PycharmProjects/pupil/pupil_src/shared_modules/calibration_choreography/single_marker_plugin.py#L100)
+- **상수 위치**: `SingleMarkerChoreographyPlugin._FIXED_MARKER_POSITION` (Line 100)
+```python
+_FIXED_MARKER_POSITION = (0.5, 0.5)  # 화면 중앙 고정 마커 좌표
+```
+
+### 7.3 오프라인 테스트 하네스 안구 타겟 좌표 (Synthetic Dummy Frame)
+- **파일 경로**: [tests/test_dummy_harness.py](file:///home/byeongjun/PycharmProjects/pupil/tests/test_dummy_harness.py#L32-L35)
+- **함수 위치**: `make_synthetic_eye(height, width)` (Lines 32~35)
+```python
+cx, cy = width // 2, height // 2  # 가상 생성 동공 타겟 좌표
+```
