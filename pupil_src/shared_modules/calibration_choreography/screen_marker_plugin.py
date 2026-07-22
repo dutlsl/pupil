@@ -147,7 +147,7 @@ class ScreenMarkerChoreographyPlugin(
         )
 
         self.__ui_slider_sample_duration = ui.Slider(
-            "sample_duration", self, label="Sample duration", min=10, max=100, step=1
+            "sample_duration", self, label="Sample duration", min=10, max=1000, step=1
         )
 
         return [

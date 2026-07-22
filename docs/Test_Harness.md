@@ -1,5 +1,38 @@
 # Pupil Labs 딥러닝 동공 디텍터 사용자 가이드 및 실행 매뉴얼 (User Guide & Harness Manual)
 
+(pupil-umamba) byeongjun@server3:~/PycharmProjects/pupil/pupil_src$ cd ~/PycharmProjects/pupil/pupil_src && python main.py
+[20:34:10] WARNING  eye0 - uvc: Could not set Value. 'Backlight Compensation'.                                                                                                                           uvc_backend.py:395
+           INFO     eye0 - pupil_detector_plugins.detector_2d_plugin: Initializing TemporalUNet and 2D nnUNet models...                                                                           detector_2d_plugin.py:130
+           WARNING  eye1 - uvc: Could not set Value. 'Backlight Compensation'.                                                                                                                           uvc_backend.py:395
+           INFO     eye1 - pupil_detector_plugins.detector_2d_plugin: Initializing TemporalUNet and 2D nnUNet models...                                                                           detector_2d_plugin.py:130
+TemporalUNet created from /home/byeongjun/PycharmProjects/nnUNet/nnUNet_results/Dataset600_OpenEDS2019/nnUNetTrainer_ImageNetPretrained__nnUNetPlans__2d/fold_0/checkpoint_best.pth
+  Encoder params (frozen): 14,158,944
+  Decoder params (trainable): 52,351,256
+  Total trainable: 38,192,312
+[20:34:11] INFO     eye0 - pupil_detector_plugins.detector_2d_plugin: ✅ TemporalUNet & 2D nnUNet initialized successfully.                                                                       detector_2d_plugin.py:170
+           INFO     eye0 - pupil_detector_plugins.detector_2d_plugin: RITnet model initialized successfully as fallback.                                                                          detector_2d_plugin.py:194
+TemporalUNet created from /home/byeongjun/PycharmProjects/nnUNet/nnUNet_results/Dataset600_OpenEDS2019/nnUNetTrainer_ImageNetPretrained__nnUNetPlans__2d/fold_0/checkpoint_best.pth
+  Encoder params (frozen): 14,158,944
+  Decoder params (trainable): 52,351,256
+  Total trainable: 38,192,312
+           INFO     eye1 - pupil_detector_plugins.detector_2d_plugin: ✅ TemporalUNet & 2D nnUNet initialized successfully.                                                                       detector_2d_plugin.py:170
+           INFO     eye1 - pupil_detector_plugins.detector_2d_plugin: RITnet model initialized successfully as fallback.                                                                          detector_2d_plugin.py:194
+[20:34:26] INFO     world - calibration_choreography.base_plugin: Starting  Calibration                                                                                                                  base_plugin.py:537
+open(): 그런 파일이나 디렉터리가 없습니다
+[20:34:43] INFO     world - calibration_choreography.base_plugin: Stopping  Calibration                                                                                                                  base_plugin.py:574
+open(): 그런 파일이나 디렉터리가 없습니다
+The maximum number of function evaluations is exceeded.
+Function evaluations 100, initial cost 1.2221e+03, final cost 9.9826e+00, first-order optimality 6.70e-03.
+`ftol` termination condition is satisfied.
+Function evaluations 20, initial cost 3.2332e+00, final cost 1.0544e+00, first-order optimality 6.16e-05.
+`ftol` termination condition is satisfied.
+Function evaluations 24, initial cost 1.2624e+03, final cost 1.0168e+01, first-order optimality 3.85e-04.
+[20:34:45] INFO     world - accuracy_visualizer: Angular accuracy: 15.241 degrees                                                                                                                accuracy_visualizer.py:402
+           INFO     world - accuracy_visualizer: Angular precision: 0.095 degrees                                                                                                                accuracy_visualizer.py:411
+^C[20:34:56] WARNING  MainProcess - root: Launcher shutting down with active children: [<Process name='eye1' pid=214611 parent=214507 started>, <Process name='eye0' pid=214607 parent=214507 started>, <Process  main.py:351
+                    name='world' pid=214522 parent=214507 started>]                                                                                                                                                        
+           WARNING  eye0 - uvc: Turbojpeg jpeg2yuv: b'Corrupt JPEG data: premature end of data segment'    
+
  문서는 **Pupil Labs 딥러닝 동공 디텍터 모듈(`Detector2DPlugin`)의 실행 환경, GUI 조작법, 오프라인 검증, 트러블슈팅 및 캘리브레이션/검증 타겟 좌표 설정법을 정리한 유저 매뉴얼**입니다.
 
 ---
