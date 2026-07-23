@@ -541,8 +541,8 @@ class Detector2DPlugin(PupilDetectorPlugin):
 
     def on_notify(self, notification):
         subj = notification.get("subject", "").lower()
-        if ("calibration" in subj or "validation" in subj) and (subj.endswith(".should_start") or subj.endswith(".started")):
+        if "calibration" in subj and (subj.endswith(".should_start") or subj.endswith(".started")):
             if hasattr(self, "temporal_model") and self.temporal_model is not None:
                 if hasattr(self.temporal_model, "reset_temporal_state"):
                     self.temporal_model.reset_temporal_state()
-                    logger.info(f"Reset TemporalUNet ConvLSTM state for new sequence ({subj}).")
+                    logger.info(f"Reset TemporalUNet ConvLSTM state for new Calibration ({subj}).")
