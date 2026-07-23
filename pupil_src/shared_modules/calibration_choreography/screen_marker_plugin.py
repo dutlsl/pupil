@@ -78,8 +78,8 @@ class ScreenMarkerChoreographyPlugin(
                 (0.0, 0.0), (0.5, 0.0), (1.0, 0.0),  # 7, 8, 9 (Bottom row)
             ]
         if ChoreographyMode.VALIDATION == mode:
-            # (0.5, 1.0) top-center target 4 times
-            return [(0.5, 1.0), (0.5, 1.0), (0.5, 1.0), (0.5, 1.0)]
+            # (0.5, 0.7) target 5 times
+            return [(0.5, 0.7)] * 5
         raise ValueError(f"Unknown mode {mode}")
 
     def __init__(
