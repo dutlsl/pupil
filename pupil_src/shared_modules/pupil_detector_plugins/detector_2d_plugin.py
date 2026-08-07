@@ -697,28 +697,36 @@ class Detector2DPlugin(PupilDetectorPlugin):
 
     def on_notify(self, notification):
         subj = notification.get("subject", "").lower()
-        if ("calibration" in subj or "validation" in subj) and (subj.endswith(".started") or subj.endswith(".should_start")):
-            if getattr(self.g_pool, "eye_id", 0) == 0:
-                import datetime
-                model_name = getattr(self, "active_model", "TemporalUNet")
-                model_name_clean = model_name.replace(" ", "_").replace("(", "").replace(")", "")
-                exp_type = "캘리브레이션" if "calibration" in subj else "테스트"
-                now_str = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-                filename = f"{model_name_clean}_{exp_type}_{now_str}.log"
-                recordings_dir = os.path.expanduser("~/PycharmProjects/pupil/recordings")
-                os.makedirs(recordings_dir, exist_ok=True)
-                filepath = os.path.join(recordings_dir, filename)
-                with open(filepath, "w", encoding="utf-8") as f:
-                    f.write(f"=== Experiment Log ===\n")
-                    f.write(f"Model Name: {model_name}\n")
-                    f.write(f"Experiment Type: {exp_type} ({subj})\n")
-                    f.write(f"Execution Time: {datetime.datetime.now().isoformat()}\n")
-                    f.write(f"Eye ID: {getattr(self.g_pool, 'eye_id', 0)}\n")
-                    f.write(f"PyTorch Version: {torch.__version__}\n")
-                    f.write(f"CUDA Available: {torch.cuda.is_available()}\n")
-                    if torch.cuda.is_available():
-                        f.write(f"CUDA Device: {torch.cuda.get_device_name(0)}\n")
-                logger.info(f"💾 Saved experiment log to {filepath}")
+        
+        # --- Handle Accuracy Logging ---
+        if getattr(self.g_pool, "eye_id", 0) == 0:
+            if subj == "calibration.successful":
+                rmse_val = "unknown"
+                try:
+                    log_path = os.path.expanduser("~/PycharmProjects/pupil/pupil_capture.log")
+                    if os.path.exists(log_path):
+                        with open(log_path, "r", encoding="utf-8") as lf:
+                            lines = lf.readlines()
+                        for line in reversed(lines):
+                            if "Fitting. RMSE =" in line:
+                                parts = line.split("RMSE =")
+                                if len(parts) > 1:
+                                    rmse_val = parts[1].strip().split("px")[0].strip() + " px"
+                                    break
+                except Exception as ex:
+                    logger.error(f"Failed to parse RMSE from log: {ex}")
+                
+                from .experiment_logger import save_accuracy_log
+                active_model = getattr(self, "active_model", "TemporalUNet")
+                save_accuracy_log(self.g_pool, active_model, "calibration", rmse_val)
+                
+            elif subj == "accuracy_visualizer.data":
+                accuracy = notification.get("accuracy")
+                precision = notification.get("precision")
+                if accuracy is not None:
+                    from .experiment_logger import save_accuracy_log
+                    active_model = getattr(self, "active_model", "TemporalUNet")
+                    save_accuracy_log(self.g_pool, active_model, "test", accuracy, precision_value=precision)
         
         if "calibration" in subj and (subj.endswith(".should_start") or subj.endswith(".started")):
             if hasattr(self, "temporal_model") and self.temporal_model is not None:
