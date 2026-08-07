@@ -129,7 +129,7 @@ class Detector2DPlugin(PupilDetectorPlugin):
         self.temporal_model = None
         self.vanilla_2d_model = None
         self.vivim_model = None
-        self._vivim_queue = collections.deque(maxlen=3)
+        self._vivim_queue = collections.deque(maxlen=5)
         self._init_nnunet_models()
         self._init_ritnet_model()
 
@@ -184,9 +184,9 @@ class Detector2DPlugin(PupilDetectorPlugin):
                 NNUNET_DIR,
                 "nnUNet_results",
                 "Dataset600_OpenEDS2019",
-                "nnUNetTrainer_Vivim__nnUNetPlans__2d",
-                "fold_0",
-                "checkpoint_final.pth"
+                "nnUNetTrainer_Vivim_T5__nnUNetPlans__2d",
+                "fold_1",
+                "checkpoint_best.pth"
             )
             if os.path.exists(vivim_ckpt):
                 from models.vivim_backbone import VivimBackbone
@@ -443,11 +443,11 @@ class Detector2DPlugin(PupilDetectorPlugin):
         t_tensor = torch.from_numpy(canvas).unsqueeze(0).to(self.device)  # [1, 448, 448]
 
         self._vivim_queue.append(t_tensor)
-        while len(self._vivim_queue) < 3:
+        while len(self._vivim_queue) < 5:
             self._vivim_queue.append(t_tensor)
 
         seq_list = list(self._vivim_queue)
-        seq_tensor = torch.stack(seq_list, dim=1).unsqueeze(2)  # [1, 3, 1, 448, 448]
+        seq_tensor = torch.stack(seq_list, dim=1).unsqueeze(2)  # [1, 5, 1, 448, 448]
 
         with torch.inference_mode():
             logits = self.vivim_model(seq_tensor.float())
@@ -697,6 +697,29 @@ class Detector2DPlugin(PupilDetectorPlugin):
 
     def on_notify(self, notification):
         subj = notification.get("subject", "").lower()
+        if ("calibration" in subj or "validation" in subj) and (subj.endswith(".started") or subj.endswith(".should_start")):
+            if getattr(self.g_pool, "eye_id", 0) == 0:
+                import datetime
+                model_name = getattr(self, "active_model", "TemporalUNet")
+                model_name_clean = model_name.replace(" ", "_").replace("(", "").replace(")", "")
+                exp_type = "캘리브레이션" if "calibration" in subj else "테스트"
+                now_str = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+                filename = f"{model_name_clean}_{exp_type}_{now_str}.log"
+                recordings_dir = os.path.expanduser("~/PycharmProjects/pupil/recordings")
+                os.makedirs(recordings_dir, exist_ok=True)
+                filepath = os.path.join(recordings_dir, filename)
+                with open(filepath, "w", encoding="utf-8") as f:
+                    f.write(f"=== Experiment Log ===\n")
+                    f.write(f"Model Name: {model_name}\n")
+                    f.write(f"Experiment Type: {exp_type} ({subj})\n")
+                    f.write(f"Execution Time: {datetime.datetime.now().isoformat()}\n")
+                    f.write(f"Eye ID: {getattr(self.g_pool, 'eye_id', 0)}\n")
+                    f.write(f"PyTorch Version: {torch.__version__}\n")
+                    f.write(f"CUDA Available: {torch.cuda.is_available()}\n")
+                    if torch.cuda.is_available():
+                        f.write(f"CUDA Device: {torch.cuda.get_device_name(0)}\n")
+                logger.info(f"💾 Saved experiment log to {filepath}")
+        
         if "calibration" in subj and (subj.endswith(".should_start") or subj.endswith(".started")):
             if hasattr(self, "temporal_model") and self.temporal_model is not None:
                 if hasattr(self.temporal_model, "reset_temporal_state"):
