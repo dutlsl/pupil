@@ -4,6 +4,25 @@ os.environ["MKL_NUM_THREADS"] = "4"
 import platform
 import sys
 
+# Ephemeral log saving feature: automatically save console stdout & stderr logs to pupil_capture.log (mode="w") on each run
+class EphemeralLogTee:
+    def __init__(self, log_filepath, stream):
+        self.file = open(log_filepath, "w", encoding="utf-8")
+        self.stream = stream
+
+    def write(self, data):
+        self.stream.write(data)
+        self.file.write(data)
+        self.file.flush()
+
+    def flush(self):
+        self.stream.flush()
+        self.file.flush()
+
+log_file_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "pupil_capture.log"))
+sys.stdout = EphemeralLogTee(log_file_path, sys.stdout)
+sys.stderr = EphemeralLogTee(log_file_path, sys.stderr)
+
 import torch as _torch
 _orig_load = _torch.load
 def _patched_load(*args, **kwargs):
@@ -149,6 +168,10 @@ def launcher():
        ``launcher_process.should_stop``: Stops the launcher process
        ``eye_process.should_start``: Starts the eye process
     """
+
+    from process_affinity import apply_process_affinity
+
+    apply_process_affinity("main")
 
     # Reliable msg dispatch to the IPC via push bridge.
     def pull_pub(ipc_pub_url, pull):

@@ -540,6 +540,16 @@ class UVC_Source(Base_Source):
 
     @frame_size.setter
     def frame_size(self, new_size):
+        available_sizes = [tuple(size) for size in self.uvc_capture.frame_sizes]
+        if (
+            tuple(new_size) == (400, 400)
+            and (400, 400) not in available_sizes
+            and (192, 192) in available_sizes
+        ):
+            logger.warning(
+                "400x400 capture mode not available. Falling back to 192x192."
+            )
+            new_size = (192, 192)
         # closest match for size
         sizes = [
             abs(r[0] - new_size[0]) + abs(r[1] - new_size[1])

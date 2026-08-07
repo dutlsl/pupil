@@ -1,5 +1,7 @@
 # Pupil Labs 딥러닝 동공 디텍터 사용자 가이드 및 실행 매뉴얼 (User Guide & Harness Manual)
 
+    
+
 본 문서는 **Pupil Labs 딥러닝 동공 디텍터 모듈(`Detector2DPlugin`)의 실행 환경, GUI 조작법, 오프라인 검증, 트러블슈팅 및 캘리브레이션/검증 타겟 좌표 설정법을 정리한 유저 매뉴얼**입니다.
 
 ---
@@ -8,10 +10,11 @@
 
 | 작업 목적 | 실행 명령어 / 조작 방법 | 비고 |
 |:---|:---|:---|
-| **가상환경 활성화** | `conda activate pupil-umamba` | Python 3.10 + PyTorch CUDA 환경 |
-| **Pupil Capture GUI 실행** | `cd ~/PycharmProjects/pupil/pupil_src && python main.py` | 실시간 AR 글래스 및 카메라 수신 |
-| **오프라인 더미 검증 실행** | `cd ~/PycharmProjects/pupil && python tests/test_dummy_harness.py` | 하드웨어 없이 200 FPS 오프라인 검증 |
-| **디텍터 모델 전환 (UI)** | `Eye -> 2D Detector -> Active Model` 드롭다운 | `TemporalUNet` (메인) / `nnUNet 2D` / `RITnet` / `2D C++` |
+| **가상환경 활성화** | `conda activate pupil-umamba` | Python 3.10 + PyTorch CUDA 12 환경 (필수) |
+| **Pupil Capture GUI 실행** | `cd ~/PycharmProjects/pupil/pupil_src && python main.py` | 실시간 AR 글래스 수신 & **`pupil_capture.log` 자동 저장** |
+| **자동 휘발성 로그 파일** | `cat ~/PycharmProjects/pupil/pupil_capture.log` | `python main.py` 실행 시마다 기존 로그 자동 덮어쓰기 (`mode="w"`) |
+| **오프라인 더미 검증 실행** | `cd ~/PycharmProjects/pupil && python tests/test_dummy_harness.py` | 하드웨어 없이 Vivim/TemporalUNet 오프라인 시연 (80~200+ FPS) |
+| **디텍터 모델 전환 (UI)** | `Eye -> 2D Detector -> Active Model` 드롭다운 | `nnUNet Vivim (Mamba)` (신규) / `TemporalUNet` (메인) / `nnUNet 2D` / `RITnet` / `2D C++` |
 | **Left Eye (Eye 0) 반전** | `Eye -> 2D Detector -> Flip Vertically` 체크 | 광학 거울 180도 뒤집힘 보정 |
 
 ---
@@ -34,6 +37,7 @@ export MKL_NUM_THREADS=4
 
 - **Pupil 소스 루트**: `~/PycharmProjects/pupil/pupil_src`
 - **nnUNet 모델 및 가중치**: `~/PycharmProjects/nnUNet/nnUNet_results/`
+  - `nnUNet Vivim (Mamba)` (신규): `Dataset600_OpenEDS2019/nnUNetTrainer_Vivim__nnUNetPlans__2d/fold_0/checkpoint_final.pth`
   - `TemporalUNet` (메인): `TemporalUNet_v1/checkpoint_best.pth`
   - `nnUNet 2D` (Vanilla): `Dataset600_OpenEDS2019/nnUNetTrainer_ImageNetPretrained__nnUNetPlans__2d/fold_0/checkpoint_best.pth`
 - **nnUNet 모듈 코드**: `~/PycharmProjects/nnUNet` 및 `~/PycharmProjects/nnUNet_legacy`
@@ -55,7 +59,7 @@ python main.py
 
 ### 3.2 하드웨어 미연결 시 사전 검증 (오프라인 더미 테스트)
 
-AR 글래스 없이 디텍터 연산, 모델 로딩, 200 FPS 추론 지연시간을 사전 검증하려면 하네스 스크립트를 실행합니다:
+AR 글래스 없이 디텍터 연산, 모델 로딩, 80~200+ FPS 추론 지연시간을 사전 검증하려면 하네스 스크립트를 실행합니다:
 
 ```bash
 cd ~/PycharmProjects/pupil
@@ -72,7 +76,8 @@ Pupil Capture GUI 좌측/상단 메뉴를 통한 디텍터 설정 방법입니�
 1. Eye 창(안구 카메라 창)의 메뉴 아이콘 클릭
 2. **`Pupil Detector 2D`** 설정 메뉴 이동
 3. **`Active Model`** 드롭다운 항목 선택:
-   - **`TemporalUNet` (기본값 / 추천)**: 시계열 ConvLSTM 디코더 기반. 프레임 간 연속성 및 노이즈 억제 우수 (~200 FPS).
+   - **`nnUNet Vivim (Mamba)` (신규)**: Video Vision Mamba selective scan 디코더 기반. 3D 시계열 컨텍스트 반영, 0.945 최고 수준 신뢰도 (~83+ FPS).
+   - **`TemporalUNet` (추천/메인)**: 시계열 ConvLSTM 디코더 기반. 프레임 간 연속성 및 노이즈 억제 우수 (~220 FPS).
    - **`nnUNet 2D`**: 정적 데이터 바닐라 nnUNet 2D 모델.
    - **`RITnet`**: DenseNet2D 기반 레거시 베이스라인.
    - **`2D C++`**: Pupil Labs 기존 C++ 기하학 디텍터.

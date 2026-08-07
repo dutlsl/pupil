@@ -133,6 +133,32 @@ class Pye3DPlugin(PupilDetectorPlugin):
         init_dict = super().get_init_dict()
         return init_dict
 
+    def _default_3d_datum(self, timestamp):
+        datum = self.create_pupil_datum(
+            norm_pos=[0.5, 0.5],
+            diameter=0.0,
+            confidence=0.0,
+            timestamp=timestamp,
+        )
+        empty_ellipse = {
+            "axes": (0.0, 0.0),
+            "angle": 0.0,
+            "center": (0.0, 0.0),
+        }
+        datum.update(
+            {
+                "model_confidence": 0.0,
+                "projected_sphere": dict(empty_ellipse),
+                "sphere": {"center": (0.0, 0.0, 0.0), "radius": 0.0},
+                "circle_3d": {
+                    "center": (0.0, 0.0, 0.0),
+                    "normal": (0.0, 0.0, 1.0),
+                    "radius": 0.0,
+                },
+            }
+        )
+        return datum
+
     def _process_camera_changes(self):
         camera = CameraModel(
             focal_length=self.g_pool.capture.intrinsics.focal_length,
@@ -170,16 +196,15 @@ class Pye3DPlugin(PupilDetectorPlugin):
                 break
         
         if datum_2d is None:
-            logger.warning(
-                "Required 2d pupil detection input not available. "
-                "Returning default pye3d datum."
-            )
-            return self.create_pupil_datum(
-                norm_pos=[0.5, 0.5],
-                diameter=0.0,
-                confidence=0.0,
-                timestamp=frame.timestamp,
-            )
+            if not getattr(self, "_warned_missing_2d", False):
+                logger.warning(
+                    "Required 2d pupil detection input not available. "
+                    "Returning default pye3d datum."
+                )
+                self._warned_missing_2d = True
+            return self._default_3d_datum(frame.timestamp)
+        else:
+            self._warned_missing_2d = False
 
         result = self.detector.update_and_detect(
             datum_2d, frame.gray, debug=self.is_debug_window_open
@@ -301,12 +326,7 @@ class Pye3DPlugin(PupilDetectorPlugin):
                         "Required 2d pupil detection input not available. "
                         "Returning default pye3d datum."
                     )
-            return self.create_pupil_datum(
-                        norm_pos=[0.5, 0.5],
-                        diameter=0.0,
-                        confidence=0.0,
-                        timestamp=frame.timestamp,
-                    )
+            return self._default_3d_datum(frame.timestamp)
 
 
         # 4) 3D 업데이트: 2D datum와 frame.gray를 이용해 3D 모델 업데이트 및 결과 추정

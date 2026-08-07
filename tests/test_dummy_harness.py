@@ -52,19 +52,38 @@ def run_harness():
     g_pool = DummyGPool()
     print("[1/3] Instantiating Detector2DPlugin & Loading PyTorch Models...")
     plugin = Detector2DPlugin(g_pool=g_pool)
-    print("✅ Plugin Instantiated Successfully.")
+
+    # STRICT MODEL INTEGRITY ASSERTIONS
+    model_attr_map = {
+        "TemporalUNet": "temporal_model",
+        "nnUNet Vivim (Mamba)": "vivim_model",
+        "nnUNet 2D": "vanilla_2d_model",
+        "RITnet": "ritnet_model",
+    }
+
+    print("\n🔍 Verifying Model Object Loading Integrity...")
+    for m_name, attr_name in model_attr_map.items():
+        model_obj = getattr(plugin, attr_name, None)
+        assert model_obj is not None, (
+            f"❌ CRITICAL HARNESS FAILURE: Model '{m_name}' ({attr_name}) "
+            f"failed to load / is None! Check dependencies & weights!"
+        )
+        print(f"   ✓ Verified model '{m_name}' ({attr_name}) is loaded and ready.")
+
+    print("✅ Plugin & All Models Loaded Successfully.")
 
     resolutions = [
         ("Pupil Core Eye Camera (192x192)", 192, 192),
+        ("Pupil Core Eye Camera (400x400)", 400, 400),
         ("OpenEDS Dataset Native (400x640)", 400, 640),
     ]
 
-    models = ["TemporalUNet", "nnUNet 2D", "RITnet", "2D C++"]
+    models = ["TemporalUNet", "nnUNet Vivim (Mamba)", "nnUNet 2D", "RITnet", "2D C++"]
 
-    print("\n[2/3] Executing Letterboxing & Streaming Inference Tests...")
+    print("\n[2/3] Executing Dummy USB Video Stream & Streaming Inference Tests...")
     for res_name, h, w in resolutions:
         print(f"\n==================================================")
-        print(f"📷 Resolution Target: {res_name}")
+        print(f"📷 USB Camera Input Simulation Target: {res_name}")
         print(f"==================================================")
         synthetic_img = make_synthetic_eye(h, w)
         frame = DummyFrame(synthetic_img)
@@ -72,6 +91,12 @@ def run_harness():
         for model_name in models:
             print(f"\n▶ Model Mode: {model_name}")
             plugin.active_model = model_name
+
+            if model_name in model_attr_map:
+                attr = model_attr_map[model_name]
+                assert getattr(plugin, attr, None) is not None, (
+                    f"❌ CRITICAL INTEGRITY FAILURE: {model_name} ({attr}) is None! Cannot perform inference!"
+                )
 
             latencies = []
             for frame_idx in range(1, 6):
@@ -84,6 +109,9 @@ def run_harness():
                 assert "norm_pos" in datum, f"FAIL: {model_name} missing norm_pos!"
                 assert "confidence" in datum, f"FAIL: {model_name} missing confidence!"
                 assert "ellipse" in datum, f"FAIL: {model_name} missing ellipse!"
+                assert datum.get("method") == model_name, (
+                    f"❌ METHOD MISMATCH FAILURE: Requested '{model_name}', but got '{datum.get('method')}'! Fallback occurred!"
+                )
 
                 print(
                     f"   Frame {frame_idx}: Latency = {latency_ms:6.2f} ms | "
@@ -97,7 +125,7 @@ def run_harness():
 
     print("\n[3/3] Integrity Verification Completed.")
     print("=" * 75)
-    print("🎉 HARNESS RESULT: PASS (192x192 Letterboxing & 400x640 Native Verified)")
+    print("🎉 HARNESS RESULT: PASS (Strict Model Object & Inference Verified)")
     print("=" * 75)
 
 if __name__ == "__main__":

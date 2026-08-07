@@ -53,6 +53,10 @@ def world(
                that it not [dt,pupil,gaze].
     """
 
+    from process_affinity import apply_process_affinity
+
+    apply_process_affinity("world")
+
     # We defer the imports because of multiprocessing.
     # Otherwise the world process each process also loads the other imports.
     # This is not harmful but unnecessary.

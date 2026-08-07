@@ -90,6 +90,10 @@ def eye(
         ``frame.eye.<eye id>``: Eye frames with id ``<eye id>``
     """
 
+    from process_affinity import apply_process_affinity
+
+    apply_process_affinity("eye", eye_id)
+
     # We deferr the imports becasue of multiprocessing.
     # Otherwise the world process each process also loads the other imports.
     import zmq
@@ -251,7 +255,7 @@ def eye(
         default_capture_name = "UVC_Source"
         default_capture_settings = {
             "preferred_names": preferred_names,
-            "frame_size": (192, 192),
+            "frame_size": (400, 400),
             "frame_rate": 120,
         }
 
@@ -537,18 +541,43 @@ def eye(
         g_pool.iconbar.append(icon)
 
         plugins_to_load = session_settings.get("loaded_plugins", default_plugins)
+        if os.getenv("PUPIL_HYBRID_ENABLED", "0").strip().lower() not in {
+            "",
+            "0",
+            "false",
+            "no",
+            "off",
+        }:
+            # Detector class names are persisted in the session. Replace a saved
+            # regular detector explicitly so Hybrid mode works without deleting the
+            # user's unrelated camera/UI settings.
+            plugins_to_load = [
+                initializer
+                for initializer in plugins_to_load
+                if initializer[0]
+                not in {"Detector2DPlugin", "HybridDetector2DPlugin"}
+            ]
+            plugins_to_load.append(("HybridDetector2DPlugin", {}))
         if overwrite_cap_settings:
             # Ensure that overwrite_cap_settings takes preference over source plugins
             # with incorrect settings that were loaded from session settings.
             plugins_to_load.append(overwrite_cap_settings)
 
+        # Add available detectors (e.g. Detector2DPlugin) to plugins to load if missing from saved session
+        plugins_to_load_names = {name for name, _ in plugins_to_load}
+        for available_detector in available_detectors:
+            det_name = available_detector.__name__
+            if det_name not in plugins_to_load_names:
+                plugins_to_load.insert(2, (det_name, {}))
+                plugins_to_load_names.add(det_name)
+
         # Add runtime plugins to the list of plugins to load with default arguments,
         # if not already restored from session settings
-        plugins_to_load_names = {name for name, _ in plugins_to_load}
         for runtime_detector in runtime_detectors:
             runtime_name = runtime_detector.__name__
             if runtime_name not in plugins_to_load_names:
                 plugins_to_load.append((runtime_name, {}))
+                plugins_to_load_names.add(runtime_name)
 
         g_pool.plugins = Plugin_List(g_pool, plugins_to_load)
 
@@ -773,7 +802,8 @@ def eye(
                         )
 
                 for result in event.get(EVENT_KEY, ()):
-                    pupil_socket.send(result)
+                    if not result.pop("_published_externally", False):
+                        pupil_socket.send(result)
 
             # GL drawing
             if window_should_update():

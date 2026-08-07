@@ -1,0 +1,157 @@
+{
+  "environment": {
+    "hostname": "server3",
+    "cpu": "13th Gen Intel(R) Core(TM) i9-13900K",
+    "gpu": "NVIDIA GeForce RTX 4090",
+    "device": "cuda:0",
+    "python": "3.9.21",
+    "pytorch": "2.6.0+cu124",
+    "cuda_runtime": "12.4",
+    "cudnn": 90100,
+    "driver_nvidia_smi": "| NVIDIA-SMI 535.309.01             Driver Version: 535.309.01   CUDA Version: 12.2     |",
+    "pid": 581615
+  },
+  "settings": {
+    "preparation_iterations": 1000,
+    "measurement_warmup_iterations": 1000,
+    "timed_iterations": 2000,
+    "cudnn_benchmark": true,
+    "matmul_tf32": true,
+    "cudnn_tf32": true,
+    "timing": "perf_counter_ns; synchronize before start and after TDTracker",
+    "td_checkpoint": "/home/byeongjun/PycharmProjects/pupil/pupil_src/shared_modules/pupil_detector_plugins/best_checkpoint.pth",
+    "rgb_checkpoint": "/home/byeongjun/PycharmProjects/pupil/pupil_src/shared_modules/pupil_detector_plugins/best_model.pkl"
+  },
+  "inputs": {
+    "td": {
+      "shape": [
+        1,
+        8,
+        2,
+        60,
+        80
+      ],
+      "dtype": "torch.float32",
+      "data_ptr": 128550564790272,
+      "min": 0.00013725191820412874,
+      "max": 14.999809265136719
+    },
+    "rgb": {
+      "shape": [
+        1,
+        1,
+        400,
+        400
+      ],
+      "dtype": "torch.float32",
+      "data_ptr": 128550565097472,
+      "min": 9.495997801423073e-07,
+      "max": 0.9999884366989136
+    }
+  },
+  "measurements": [
+    {
+      "case": 1,
+      "condition": "TDTracker-only",
+      "method": "Eager",
+      "mean_ms": 0.7767792865,
+      "p50_ms": 0.742283,
+      "p95_ms": 1.00059845,
+      "hz": 1287.3669746084302,
+      "improvement_vs_eager_pct": 0.0,
+      "best_in_condition": false
+    },
+    {
+      "case": 2,
+      "condition": "TDTracker-only",
+      "method": "torch.compile",
+      "mean_ms": 0.47560244250000006,
+      "p50_ms": 0.39033850000000003,
+      "p95_ms": 0.74068315,
+      "hz": 2102.5964348364337,
+      "improvement_vs_eager_pct": 38.77251224823951,
+      "best_in_condition": false
+    },
+    {
+      "case": 3,
+      "condition": "TDTracker-only",
+      "method": "Eager + external CUDA Graph",
+      "mean_ms": 0.455528018,
+      "p50_ms": 0.400326,
+      "p95_ms": 0.6834988999999999,
+      "hz": 2195.254650615146,
+      "improvement_vs_eager_pct": 41.356827361796554,
+      "best_in_condition": false
+    },
+    {
+      "case": 4,
+      "condition": "TDTracker-only",
+      "method": "torch.compile + external CUDA Graph",
+      "mean_ms": 0.3549002815,
+      "p50_ms": 0.312827,
+      "p95_ms": 0.5565371,
+      "hz": 2817.6928904464676,
+      "improvement_vs_eager_pct": 54.31130983176647,
+      "best_in_condition": true
+    },
+    {
+      "case": 5,
+      "condition": "RGB immediately before TDTracker",
+      "method": "Eager",
+      "mean_ms": 0.8399738574999999,
+      "p50_ms": 0.788257,
+      "p95_ms": 0.99972115,
+      "hz": 1190.513241657643,
+      "improvement_vs_eager_pct": 0.0,
+      "best_in_condition": false
+    },
+    {
+      "case": 6,
+      "condition": "RGB immediately before TDTracker",
+      "method": "torch.compile",
+      "mean_ms": 0.5137255405000001,
+      "p50_ms": 0.4962205,
+      "p95_ms": 0.8193478,
+      "hz": 1946.5646948888652,
+      "improvement_vs_eager_pct": 38.84029414570201,
+      "best_in_condition": false
+    },
+    {
+      "case": 7,
+      "condition": "RGB immediately before TDTracker",
+      "method": "Eager + external CUDA Graph",
+      "mean_ms": 0.5844504554999999,
+      "p50_ms": 0.551837,
+      "p95_ms": 0.8989278,
+      "hz": 1711.0090181117162,
+      "improvement_vs_eager_pct": 30.420399363440907,
+      "best_in_condition": false
+    },
+    {
+      "case": 8,
+      "condition": "RGB immediately before TDTracker",
+      "method": "torch.compile + external CUDA Graph",
+      "mean_ms": 0.450525438,
+      "p50_ms": 0.33030550000000003,
+      "p95_ms": 0.80789405,
+      "hz": 2219.6304928735235,
+      "improvement_vs_eager_pct": 46.36435003573905,
+      "best_in_condition": true
+    }
+  ],
+  "tdtracker_dynamo": {
+    "graph_count": 3,
+    "graph_break_count": 2,
+    "break_reasons": [
+      "GraphCompileReason(reason='step_unsupported', user_stack=[<FrameSummary file /home/byeongjun/PycharmProjects/pupil/pupil_src/shared_modules/pupil_detector_plugins/dvs_models/TDTracker.py, line 73 in forward>], graph_break=True)"
+    ]
+  },
+  "nvidia_smi_at_start": "Wed Jul 29 12:49:42 2026       \n+---------------------------------------------------------------------------------------+\n| NVIDIA-SMI 535.309.01             Driver Version: 535.309.01   CUDA Version: 12.2     |\n|-----------------------------------------+----------------------+----------------------+\n| GPU  Name                 Persistence-M | Bus-Id        Disp.A | Volatile Uncorr. ECC |\n| Fan  Temp   Perf          Pwr:Usage/Cap |         Memory-Usage | GPU-Util  Compute M. |\n|                                         |                      |               MIG M. |\n|=========================================+======================+======================|\n|   0  NVIDIA GeForce RTX 4090        Off | 00000000:01:00.0  On |                  Off |\n|  0%   39C    P8              29W / 450W |    948MiB / 24564MiB |     27%      Default |\n|                                         |                      |                  N/A |\n+-----------------------------------------+----------------------+----------------------+\n                                                                                         \n+---------------------------------------------------------------------------------------+\n| Processes:                                                                            |\n|  GPU   GI   CI        PID   Type   Process name                            GPU Memory |\n|        ID   ID                                                             Usage      |\n|=======================================================================================|\n|    0   N/A  N/A     13539      G   /usr/lib/xorg/Xorg                           53MiB |\n|    0   N/A  N/A     15007      G   /usr/lib/xorg/Xorg                           53MiB |\n|    0   N/A  N/A     16378      G   /usr/lib/xorg/Xorg                          206MiB |\n|    0   N/A  N/A     16569      G   /usr/bin/gnome-shell                         85MiB |\n|    0   N/A  N/A    163466      G   ...ycharm-professional/658/bin/pycharm       24MiB |\n|    0   N/A  N/A    164881      G   ...2026.2/log/jcef_chromium_163466.log       47MiB |\n|    0   N/A  N/A    501245      G   ...rome https://account.jetbrains.com/        6MiB |\n|    0   N/A  N/A    501329      G   ...n=20260716-170054.875000-production       41MiB |\n|    0   N/A  N/A    515431      G   ...irefox/8664/usr/lib/firefox/firefox      155MiB |\n+---------------------------------------------------------------------------------------+\n",
+  "scope_notes": [
+    "Not measured with real cameras or the Pupil runtime.",
+    "RGB and TDTracker ran serially, never concurrently.",
+    "RGB execution time is excluded from RGB + Event results.",
+    "H2D, D2H, FIFO, DAVIS, BinaRep, IPC, pye3d, and UI are excluded.",
+    "Hz is theoretical serial throughput of the timed TDTracker section, not camera output rate."
+  ]
+}

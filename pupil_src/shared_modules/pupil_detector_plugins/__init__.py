@@ -9,6 +9,7 @@ See COPYING and COPYING.LESSER for license details.
 ---------------------------------------------------------------------------~(*)
 """
 import logging
+import os
 import traceback
 import typing as T
 
@@ -39,7 +40,21 @@ def available_detector_plugins() -> T.List[T.Type[PupilDetectorPlugin]]:
     Returns list of all detectors.
     """
 
-    all_plugins: T.List[T.Type[PupilDetectorPlugin]] = [Detector2DPlugin]
+    hybrid_enabled = os.getenv("PUPIL_HYBRID_ENABLED", "0").strip().lower() not in {
+        "",
+        "0",
+        "false",
+        "no",
+        "off",
+    }
+    if hybrid_enabled:
+        from .detector_2d_hybrid_plugin import HybridDetector2DPlugin
+
+        all_plugins: T.List[T.Type[PupilDetectorPlugin]] = [
+            HybridDetector2DPlugin
+        ]
+    else:
+        all_plugins = [Detector2DPlugin]
 
     try:
         from .pye3d_plugin import Pye3DPlugin

@@ -1,0 +1,974 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Hybrid Pupil CUDA Graph 통합 분석 보고서</title>
+  <style>
+    :root {
+      --bg: #07101d;
+      --panel: #0d1929;
+      --panel-2: #112239;
+      --line: #233955;
+      --text: #eaf2ff;
+      --muted: #9db0c9;
+      --cyan: #4bd7ff;
+      --green: #52e29a;
+      --yellow: #ffd166;
+      --orange: #ff9f5a;
+      --red: #ff657a;
+      --violet: #a98bff;
+      --shadow: 0 18px 50px rgba(0, 0, 0, .28);
+    }
+
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; }
+    body {
+      margin: 0;
+      color: var(--text);
+      background:
+        radial-gradient(circle at 10% -10%, rgba(75, 215, 255, .16), transparent 33rem),
+        radial-gradient(circle at 90% 8%, rgba(169, 139, 255, .13), transparent 31rem),
+        var(--bg);
+      font-family: Inter, Pretendard, "Noto Sans KR", system-ui, -apple-system, sans-serif;
+      line-height: 1.65;
+    }
+
+    a { color: var(--cyan); }
+    code, pre {
+      font-family: "JetBrains Mono", "SFMono-Regular", Consolas, monospace;
+    }
+    code {
+      color: #d4e9ff;
+      background: rgba(75, 215, 255, .08);
+      padding: .12rem .35rem;
+      border-radius: .35rem;
+    }
+    pre {
+      margin: 0;
+      padding: 1rem 1.1rem;
+      overflow-x: auto;
+      color: #d7e7fa;
+      background: #081321;
+      border: 1px solid var(--line);
+      border-radius: .8rem;
+      font-size: .86rem;
+      line-height: 1.55;
+    }
+
+    .layout {
+      display: grid;
+      grid-template-columns: 250px minmax(0, 1fr);
+      min-height: 100vh;
+    }
+    aside {
+      position: sticky;
+      top: 0;
+      height: 100vh;
+      padding: 1.4rem 1rem;
+      background: rgba(7, 16, 29, .91);
+      border-right: 1px solid var(--line);
+      backdrop-filter: blur(14px);
+      overflow-y: auto;
+    }
+    .brand {
+      padding: .6rem .7rem 1.2rem;
+      border-bottom: 1px solid var(--line);
+    }
+    .brand strong {
+      display: block;
+      letter-spacing: .04em;
+      font-size: 1.05rem;
+    }
+    .brand span {
+      display: block;
+      margin-top: .25rem;
+      color: var(--muted);
+      font-size: .76rem;
+    }
+    nav { margin-top: 1rem; }
+    nav a {
+      display: block;
+      padding: .55rem .7rem;
+      color: var(--muted);
+      text-decoration: none;
+      border-radius: .55rem;
+      font-size: .88rem;
+    }
+    nav a:hover {
+      color: var(--text);
+      background: rgba(75, 215, 255, .08);
+    }
+    .status-box {
+      margin-top: 1.2rem;
+      padding: .8rem;
+      border: 1px solid rgba(255, 159, 90, .35);
+      border-radius: .75rem;
+      background: rgba(255, 159, 90, .07);
+      color: #ffd8bd;
+      font-size: .78rem;
+    }
+
+    main {
+      width: min(1320px, 100%);
+      padding: 3rem clamp(1.2rem, 4vw, 4rem) 6rem;
+    }
+    section { margin-top: 4.5rem; scroll-margin-top: 2rem; }
+    .hero { margin-top: 0; }
+    .eyebrow {
+      color: var(--cyan);
+      text-transform: uppercase;
+      letter-spacing: .16em;
+      font-weight: 750;
+      font-size: .76rem;
+    }
+    h1 {
+      max-width: 900px;
+      margin: .6rem 0 1rem;
+      font-size: clamp(2.15rem, 5vw, 4.45rem);
+      line-height: 1.08;
+      letter-spacing: -.045em;
+    }
+    h2 {
+      margin: 0 0 1.2rem;
+      font-size: clamp(1.55rem, 3vw, 2.3rem);
+      letter-spacing: -.025em;
+    }
+    h3 {
+      margin: 0 0 .7rem;
+      font-size: 1.08rem;
+    }
+    .lead {
+      max-width: 910px;
+      color: #bfd0e5;
+      font-size: 1.08rem;
+    }
+    .meta {
+      display: flex;
+      flex-wrap: wrap;
+      gap: .55rem;
+      margin-top: 1.5rem;
+    }
+    .pill {
+      padding: .38rem .65rem;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      background: rgba(255,255,255,.025);
+      color: var(--muted);
+      font-size: .78rem;
+    }
+
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(12, minmax(0, 1fr));
+      gap: 1rem;
+    }
+    .card {
+      grid-column: span 4;
+      padding: 1.2rem;
+      background: linear-gradient(145deg, rgba(17, 34, 57, .95), rgba(11, 24, 40, .95));
+      border: 1px solid var(--line);
+      border-radius: 1rem;
+      box-shadow: var(--shadow);
+    }
+    .card.wide { grid-column: span 6; }
+    .card.full { grid-column: 1 / -1; }
+    .card p:last-child { margin-bottom: 0; }
+    .label {
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: .09em;
+      font-size: .7rem;
+      font-weight: 750;
+    }
+    .metric {
+      margin: .2rem 0;
+      font-size: clamp(1.65rem, 3vw, 2.65rem);
+      font-weight: 820;
+      letter-spacing: -.04em;
+    }
+    .metric.good { color: var(--green); }
+    .metric.warn { color: var(--yellow); }
+    .metric.bad { color: var(--red); }
+    .subtle { color: var(--muted); font-size: .86rem; }
+
+    .verdict {
+      margin-top: 1.4rem;
+      padding: 1.2rem 1.35rem;
+      border-left: 4px solid var(--orange);
+      border-radius: .25rem 1rem 1rem .25rem;
+      background: linear-gradient(90deg, rgba(255, 159, 90, .12), rgba(255, 159, 90, .035));
+    }
+    .verdict strong { color: #ffd2b0; }
+
+    .flow {
+      display: flex;
+      align-items: stretch;
+      gap: .7rem;
+      overflow-x: auto;
+      padding: .3rem 0 .7rem;
+    }
+    .node {
+      min-width: 145px;
+      flex: 1;
+      padding: .9rem;
+      text-align: center;
+      border: 1px solid var(--line);
+      border-radius: .85rem;
+      background: var(--panel);
+    }
+    .node strong { display: block; font-size: .9rem; }
+    .node span { display: block; margin-top: .2rem; color: var(--muted); font-size: .72rem; }
+    .arrow {
+      align-self: center;
+      color: var(--cyan);
+      font-size: 1.2rem;
+    }
+    .node.hot { border-color: rgba(255, 101, 122, .6); background: rgba(255, 101, 122, .08); }
+    .node.ok { border-color: rgba(82, 226, 154, .45); }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      overflow: hidden;
+      border: 1px solid var(--line);
+      border-radius: .9rem;
+      background: rgba(13, 25, 41, .84);
+      font-size: .9rem;
+    }
+    th, td {
+      padding: .78rem .85rem;
+      text-align: left;
+      vertical-align: top;
+      border-bottom: 1px solid var(--line);
+    }
+    th {
+      color: #cfe2f8;
+      background: rgba(255,255,255,.035);
+      font-size: .76rem;
+      text-transform: uppercase;
+      letter-spacing: .055em;
+    }
+    tr:last-child td { border-bottom: 0; }
+    td strong.good { color: var(--green); }
+    td strong.warn { color: var(--yellow); }
+    td strong.bad { color: var(--red); }
+
+    .bars { display: grid; gap: .75rem; }
+    .bar-row {
+      display: grid;
+      grid-template-columns: 150px minmax(160px, 1fr) 105px;
+      gap: .8rem;
+      align-items: center;
+    }
+    .bar-label { color: #c7d7ea; font-size: .84rem; }
+    .track {
+      height: 16px;
+      overflow: hidden;
+      border-radius: 999px;
+      background: #07111e;
+      border: 1px solid #1d3048;
+    }
+    .fill { height: 100%; border-radius: inherit; }
+    .fill.good { background: linear-gradient(90deg, #2fbf83, var(--green)); }
+    .fill.warn { background: linear-gradient(90deg, #e5a82d, var(--yellow)); }
+    .fill.bad { background: linear-gradient(90deg, #db4760, var(--red)); }
+    .bar-value { text-align: right; font-variant-numeric: tabular-nums; font-size: .83rem; }
+
+    .comparison {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 1rem;
+    }
+    .machine {
+      padding: 1.25rem;
+      border: 1px solid var(--line);
+      border-radius: 1rem;
+      background: var(--panel);
+    }
+    .machine.current { border-color: rgba(75, 215, 255, .42); }
+    .machine ul, .compact-list { margin: .65rem 0 0; padding-left: 1.15rem; }
+    .machine li, .compact-list li { margin: .35rem 0; }
+
+    .cause {
+      display: grid;
+      grid-template-columns: 55px 1fr;
+      gap: 1rem;
+      padding: 1.1rem 0;
+      border-bottom: 1px solid var(--line);
+    }
+    .cause:last-child { border-bottom: 0; }
+    .rank {
+      display: grid;
+      place-items: center;
+      width: 48px;
+      height: 48px;
+      border: 1px solid var(--line);
+      border-radius: 50%;
+      color: var(--cyan);
+      font-weight: 850;
+      background: var(--panel-2);
+    }
+    .confidence {
+      display: inline-block;
+      margin-left: .45rem;
+      padding: .12rem .4rem;
+      border-radius: 999px;
+      font-size: .65rem;
+      vertical-align: .1rem;
+    }
+    .confidence.high { color: #b7f7d8; background: rgba(82, 226, 154, .12); }
+    .confidence.mid { color: #ffe3a3; background: rgba(255, 209, 102, .12); }
+
+    .callout {
+      padding: 1rem 1.1rem;
+      border: 1px solid rgba(75, 215, 255, .27);
+      border-radius: .85rem;
+      background: rgba(75, 215, 255, .055);
+      color: #cdefff;
+    }
+    .warning {
+      border-color: rgba(255, 101, 122, .3);
+      background: rgba(255, 101, 122, .06);
+      color: #ffd0d7;
+    }
+
+    .checklist {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: .75rem;
+    }
+    .check {
+      position: relative;
+      padding: .85rem .9rem .85rem 2.55rem;
+      border: 1px solid var(--line);
+      border-radius: .75rem;
+      background: var(--panel);
+      font-size: .86rem;
+    }
+    .check::before {
+      content: "✓";
+      position: absolute;
+      left: .9rem;
+      color: var(--green);
+      font-weight: 900;
+    }
+    .check.pending::before { content: "○"; color: var(--yellow); }
+
+    details {
+      margin-top: .75rem;
+      border: 1px solid var(--line);
+      border-radius: .8rem;
+      background: rgba(13, 25, 41, .78);
+    }
+    summary {
+      padding: .85rem 1rem;
+      cursor: pointer;
+      color: #cfe3fa;
+      font-weight: 700;
+    }
+    details > div { padding: 0 1rem 1rem; color: var(--muted); }
+
+    footer {
+      margin-top: 5rem;
+      padding-top: 1.4rem;
+      border-top: 1px solid var(--line);
+      color: var(--muted);
+      font-size: .8rem;
+    }
+
+    @media (max-width: 980px) {
+      .layout { display: block; }
+      aside { position: relative; width: auto; height: auto; border-right: 0; border-bottom: 1px solid var(--line); }
+      nav { display: flex; gap: .2rem; overflow-x: auto; }
+      nav a { white-space: nowrap; }
+      .status-box { display: none; }
+      main { padding-top: 2rem; }
+      .card, .card.wide { grid-column: span 6; }
+    }
+    @media (max-width: 650px) {
+      .card, .card.wide { grid-column: 1 / -1; }
+      .comparison, .checklist { grid-template-columns: 1fr; }
+      .bar-row { grid-template-columns: 105px 1fr 75px; gap: .5rem; }
+      th, td { padding: .62rem; }
+    }
+    @media print {
+      :root { --bg: #fff; --panel: #fff; --panel-2: #f3f6fa; --line: #cad3df; --text: #162235; --muted: #55657a; }
+      body { background: #fff; }
+      .layout { display: block; }
+      aside { display: none; }
+      main { width: 100%; padding: 0; }
+      .card { box-shadow: none; }
+      section { break-inside: avoid; }
+    }
+  </style>
+</head>
+<body>
+<div class="layout">
+  <aside>
+    <div class="brand">
+      <strong>HYBRID PUPIL</strong>
+      <span>CUDA Graph 통합 분석 · 2026-07-28</span>
+    </div>
+    <nav aria-label="보고서 목차">
+      <a href="#summary">01. 핵심 요약</a>
+      <a href="#goal">02. 목표와 판정 기준</a>
+      <a href="#architecture">03. 구현 구조</a>
+      <a href="#environment">04. 환경 비교</a>
+      <a href="#measurements">05. 실측 결과</a>
+      <a href="#diagnosis">06. 병목 진단</a>
+      <a href="#changes">07. 적용 변경</a>
+      <a href="#validation">08. 검증 현황</a>
+      <a href="#next">09. 다음 실험 순서</a>
+      <a href="#runbook">10. 실행 Runbook</a>
+    </nav>
+    <div class="status-box">
+      현재 판정<br>
+      <strong>기능 동작 / 1000Hz 목표 미달</strong><br>
+      CUDA Graph 단독 성능은 충분하며 full runtime 자원 경합이 핵심이다.
+    </div>
+  </aside>
+
+  <main>
+    <section class="hero" id="summary">
+      <div class="eyebrow">Engineering handoff & performance analysis</div>
+      <h1>Hybrid Pupil<br>CUDA Graph 통합 분석</h1>
+      <p class="lead">
+        RITnet + pye3d의 정확한 NIR anchor를 유지하면서 DAVIS/TDTracker로 pupil center를
+        약 1000Hz 갱신하기 위한 구현, 실제 장비 측정, 환경 변경 영향 및 다음 최적화
+        순서를 한 문서에 정리했다.
+      </p>
+      <div class="meta">
+        <span class="pill">Branch: feature/event-camera-cuda-graph</span>
+        <span class="pill">CPU: Intel Core i9-13900K</span>
+        <span class="pill">GPU: RTX 4090 × 1</span>
+        <span class="pill">Target: fresh state ≥ 990Hz</span>
+        <span class="pill">Current: CUDA infer 765~874Hz</span>
+      </div>
+
+      <div class="grid" style="margin-top: 2rem">
+        <article class="card">
+          <div class="label">CUDA Graph 단독</div>
+          <div class="metric good">1,772 Hz</div>
+          <div class="subtle">median 0.539ms · p95 0.666ms</div>
+        </article>
+        <article class="card">
+          <div class="label">Full runtime CUDA infer</div>
+          <div class="metric warn">765~874 Hz</div>
+          <div class="subtle">RITnet/UI와 단일 GPU 공유</div>
+        </article>
+        <article class="card">
+          <div class="label">Parent fresh state</div>
+          <div class="metric bad">121~166 Hz</div>
+          <div class="subtle">완료 결과 batching/coalescing 영향</div>
+        </article>
+      </div>
+
+      <div class="verdict">
+        <strong>결론:</strong> TDTracker 모델과 CUDA Graph 자체는 1000Hz 이상의 처리 여유가 있다.
+        현재 목표 미달의 1차 원인은 <strong>4090 두 장에서 한 장으로 줄면서 RITnet, TDTracker,
+        UI가 모두 GPU 0에 집중된 것</strong>이다. i9-13900K의 P/E-core 혼합 구조와 affinity
+        미설정은 publisher 및 1ms polling 지터를 키우는 2차 원인이다.
+      </div>
+    </section>
+
+    <section id="goal">
+      <div class="eyebrow">Definition of success</div>
+      <h2>목표와 성공 판정 기준</h2>
+      <div class="grid">
+        <article class="card wide">
+          <h3>시스템 역할</h3>
+          <ul class="compact-list">
+            <li><strong>RITnet + pye3d:</strong> 정확한 pupil ellipse와 eyeball model anchor</li>
+            <li><strong>DVS + TDTracker:</strong> NIR frame 사이의 고속 pupil center</li>
+            <li><strong>최종 출력:</strong> 정확도는 유지하고 fresh DVS state를 약 1000Hz 갱신</li>
+          </ul>
+        </article>
+        <article class="card wide">
+          <h3>판정 시 주의점</h3>
+          <p>
+            같은 좌표를 timer로 1000번 재전송해도 publish는 1000Hz가 된다.
+            따라서 <code>publish Hz</code>만으로 성공을 판단하지 않고
+            <code>seq_id</code>가 실제로 바뀌는 fresh state를 별도로 측정한다.
+          </p>
+        </article>
+      </div>
+
+      <table style="margin-top: 1rem">
+        <thead>
+          <tr><th>지표</th><th>성공 기준</th><th>의미</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>DVS slice</td><td><strong>≥ 990Hz</strong></td><td>DAVIS event가 1ms 단위로 실제 분할되는 속도</td></tr>
+          <tr><td>Submit</td><td><strong>≥ 990Hz</strong></td><td>새 8-frame stack이 TDTracker에 제출되는 속도</td></tr>
+          <tr><td>CUDA infer</td><td><strong>≥ 990Hz</strong></td><td>GPU inference/result copy가 완료되는 속도</td></tr>
+          <tr><td>Parent fresh state</td><td><strong>≥ 990Hz</strong></td><td>eye process가 서로 다른 seq_id를 수신하는 속도</td></tr>
+          <tr><td>Publish</td><td><strong>≥ 990Hz</strong></td><td>subscriber로 pupil datum을 전송하는 속도</td></tr>
+          <tr><td>Drop</td><td><strong>0</strong></td><td>async ring이 가득 차 inference result를 놓친 횟수</td></tr>
+          <tr><td>State age</td><td><strong>지속 증가 없음</strong></td><td>오래된 결과를 계속 재전송하는지 확인</td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section id="architecture">
+      <div class="eyebrow">Runtime design</div>
+      <h2>현재 구현 구조</h2>
+      <h3>DVS hot path</h3>
+      <div class="flow" aria-label="DVS 처리 파이프라인">
+        <div class="node ok"><strong>DAVIS read</strong><span>CameraCapture</span></div>
+        <div class="arrow">→</div>
+        <div class="node ok"><strong>1ms slice</strong><span>EventStreamSlicer</span></div>
+        <div class="arrow">→</div>
+        <div class="node ok"><strong>BinaRep</strong><span>native C · 2×60×80</span></div>
+        <div class="arrow">→</div>
+        <div class="node ok"><strong>8-frame stack</strong><span>sliding ring</span></div>
+        <div class="arrow">→</div>
+        <div class="node hot"><strong>CUDA Graph</strong><span>forward + decode</span></div>
+        <div class="arrow">→</div>
+        <div class="node hot"><strong>Async ring</strong><span>pinned CPU + event</span></div>
+        <div class="arrow">→</div>
+        <div class="node hot"><strong>Parent</strong><span>latest-only seq</span></div>
+        <div class="arrow">→</div>
+        <div class="node hot"><strong>Publish</strong><span>ZMQ 1000Hz timer</span></div>
+      </div>
+
+      <div class="grid" style="margin-top: 1rem">
+        <article class="card wide">
+          <h3>별도 DVS worker process</h3>
+          <p>
+            DAVIS read부터 inference까지 하나의 spawned process 안에서 inline으로 처리한다.
+            slice와 infer를 다시 나누지 않아 추가 IPC/scheduling boundary를 피한다.
+          </p>
+        </article>
+        <article class="card wide">
+          <h3>CUDA Graph runner</h3>
+          <p>
+            입력 shape은 <code>(1, 8, 2, 60, 80)</code>으로 고정한다. warm-up 후
+            TDTracker forward와 decode를 capture하며 static input storage 주소를 유지한다.
+          </p>
+        </article>
+        <article class="card wide">
+          <h3>Async pinned result ring</h3>
+          <p>
+            replay마다 blocking <code>.cpu()</code> 또는 synchronize를 하지 않는다.
+            x/y/confidence 세 값만 pinned slot에 복사하고 완료된 최신 slot만 소비한다.
+          </p>
+        </article>
+        <article class="card wide">
+          <h3>RITnet anchor fusion</h3>
+          <p>
+            NIR frame에서 얻은 ellipse axes/angle을 유지하고, confidence threshold를 통과한
+            DVS 결과로 center만 갱신한다. 기본 DVS 대상은 eye 0이다.
+          </p>
+        </article>
+      </div>
+
+      <details>
+        <summary>BinaRep 명세</summary>
+        <div>
+          OFF channel 0, ON channel 1 순서를 유지한다. 4개 time-bin은 각 bit로 OR되며
+          출력 값은 0~15이다. 15로 나누어 정규화하지 않는다. invalid x/y event는 제거한다.
+          native C와 NumPy 구현은 event-by-event bit-exact 테스트를 통과했다.
+        </div>
+      </details>
+      <details>
+        <summary>결과 metadata</summary>
+        <div>
+          <code>seq_id</code>, DVS hardware timestamp, stack submit, CUDA ready,
+          parent receive, publish monotonic timestamp와 submit→ready/parent/publish latency,
+          <code>fresh</code>, <code>source</code>, <code>state_age_ms</code>를 포함한다.
+        </div>
+      </details>
+    </section>
+
+    <section id="environment">
+      <div class="eyebrow">Hardware delta</div>
+      <h2>이전 환경과 현재 환경</h2>
+      <div class="comparison">
+        <article class="machine">
+          <div class="label">이전 실험 환경</div>
+          <h3>Xeon + RTX 4090 × 2</h3>
+          <ul>
+            <li>서버급 균일 코어 구조로 추정</li>
+            <li>GPU 두 장에 workload를 분리할 수 있었음</li>
+            <li>최종 보고 결과: infer/fresh state 약 1000Hz</li>
+            <li>실제 GPU별 배치와 affinity 값은 재확인 필요</li>
+          </ul>
+        </article>
+        <article class="machine current">
+          <div class="label">현재 측정 환경</div>
+          <h3>i9-13900K + RTX 4090 × 1</h3>
+          <ul>
+            <li>8 P-core + 16 E-core, 총 24코어/32스레드</li>
+            <li>단일 socket, 단일 NUMA node</li>
+            <li>RITnet/TDTracker/UI가 모두 GPU 0 사용</li>
+            <li>CPU affinity 미설정</li>
+          </ul>
+        </article>
+      </div>
+
+      <div class="callout" style="margin-top: 1rem">
+        이전 장비에서 RITnet과 TDTracker가 실제로 서로 다른 GPU에 배치됐는지는 기존 실행
+        스크립트/로그로 확인해야 한다. 다만 현재 full runtime의 GPU별 프로세스 사용량과
+        단독 benchmark 차이는 “단일 GPU 집중”이 주원인이라는 판단을 강하게 지지한다.
+      </div>
+    </section>
+
+    <section id="measurements">
+      <div class="eyebrow">Measured on current host</div>
+      <h2>실제 장비 측정 결과</h2>
+      <div class="grid">
+        <article class="card">
+          <div class="label">Slice</div>
+          <div class="metric good">969~1005</div>
+          <div class="subtle">Hz · warm-up/종료 outlier 제외</div>
+        </article>
+        <article class="card">
+          <div class="label">Submit</div>
+          <div class="metric good">968~1005</div>
+          <div class="subtle">Hz · preprocessing은 목표 근접</div>
+        </article>
+        <article class="card">
+          <div class="label">CUDA infer 완료</div>
+          <div class="metric warn">765~874</div>
+          <div class="subtle">Hz · full runtime GPU 경합</div>
+        </article>
+        <article class="card">
+          <div class="label">Parent fresh state</div>
+          <div class="metric bad">121~166</div>
+          <div class="subtle">Hz · 완료 결과가 묶여 최신값만 전달</div>
+        </article>
+        <article class="card">
+          <div class="label">Publish</div>
+          <div class="metric warn">838~916</div>
+          <div class="subtle">Hz · Python/ZMQ/GIL 및 scheduling</div>
+        </article>
+        <article class="card">
+          <div class="label">Drop</div>
+          <div class="metric bad">130~218/s</div>
+          <div class="subtle">async slot 부족 시 non-blocking drop</div>
+        </article>
+      </div>
+
+      <article class="card full" style="margin-top: 1rem">
+        <h3>목표 1000Hz 대비</h3>
+        <div class="bars">
+          <div class="bar-row">
+            <span class="bar-label">Slice</span>
+            <div class="track"><div class="fill good" style="width:100%"></div></div>
+            <span class="bar-value">≈ 100%</span>
+          </div>
+          <div class="bar-row">
+            <span class="bar-label">Submit</span>
+            <div class="track"><div class="fill good" style="width:99.5%"></div></div>
+            <span class="bar-value">≈ 99.5%</span>
+          </div>
+          <div class="bar-row">
+            <span class="bar-label">CUDA infer</span>
+            <div class="track"><div class="fill warn" style="width:83%"></div></div>
+            <span class="bar-value">≈ 83%</span>
+          </div>
+          <div class="bar-row">
+            <span class="bar-label">Parent fresh</span>
+            <div class="track"><div class="fill bad" style="width:14%"></div></div>
+            <span class="bar-value">≈ 14%</span>
+          </div>
+          <div class="bar-row">
+            <span class="bar-label">Publish</span>
+            <div class="track"><div class="fill warn" style="width:89%"></div></div>
+            <span class="bar-value">≈ 89%</span>
+          </div>
+        </div>
+      </article>
+
+      <div class="grid" style="margin-top: 1rem">
+        <article class="card wide">
+          <h3>CUDA Graph 단독 benchmark</h3>
+          <table>
+            <tbody>
+              <tr><td>처리율</td><td><strong class="good">1771.9Hz</strong></td></tr>
+              <tr><td>평균</td><td>0.557ms</td></tr>
+              <tr><td>Median</td><td>0.539ms</td></tr>
+              <tr><td>P95</td><td>0.666ms</td></tr>
+            </tbody>
+          </table>
+        </article>
+        <article class="card wide">
+          <h3>Full runtime 자원 snapshot</h3>
+          <table>
+            <tbody>
+              <tr><td>GPU utilization</td><td><strong class="warn">약 90%</strong></td></tr>
+              <tr><td>GPU memory</td><td>약 3.1GB / 24GB</td></tr>
+              <tr><td>GPU power</td><td>약 209W</td></tr>
+              <tr><td>TDTracker worker GPU</td><td>약 43%</td></tr>
+              <tr><td>eye/world GPU 합계</td><td>약 40~45%</td></tr>
+            </tbody>
+          </table>
+        </article>
+      </div>
+    </section>
+
+    <section id="diagnosis">
+      <div class="eyebrow">Root cause analysis</div>
+      <h2>병목 원인 우선순위</h2>
+      <div class="card full">
+        <div class="cause">
+          <div class="rank">1</div>
+          <div>
+            <h3>4090 두 장 → 한 장으로 GPU workload 집중 <span class="confidence high">높은 확신</span></h3>
+            <p>
+              현재 RITnet eye0/eye1, TDTracker worker, UI/OpenGL이 모두 GPU 0을 사용한다.
+              TDTracker 단독 1772Hz가 full runtime 765~874Hz로 하락하고 GPU 사용률이
+              90%인 결과와 정확히 부합한다.
+            </p>
+          </div>
+        </div>
+        <div class="cause">
+          <div class="rank">2</div>
+          <div>
+            <h3>CUDA completion batching과 async ring drop <span class="confidence high">높은 확신</span></h3>
+            <p>
+              GPU가 밀리면서 여러 CUDA event가 한 번에 완료된다. worker는 latest-only
+              결과만 parent에 전달하므로 실제 완료 infer가 800Hz여도 서로 다른 seq_id를
+              받는 parent fresh rate는 약 140Hz까지 낮아진다.
+            </p>
+          </div>
+        </div>
+        <div class="cause">
+          <div class="rank">3</div>
+          <div>
+            <h3>i9-13900K P/E-core scheduling과 affinity 부재 <span class="confidence mid">중간 확신</span></h3>
+            <p>
+              DVS worker와 eye process가 각각 여러 CPU core를 사용하며 1ms publisher/polling
+              thread가 E-core로 이동할 수 있다. DVS slicing은 1000Hz를 유지하므로 CPU가
+              전체 throughput의 1차 병목은 아니지만 publish 지터에는 영향을 준다.
+            </p>
+          </div>
+        </div>
+        <div class="cause">
+          <div class="rank">4</div>
+          <div>
+            <h3>Python/ZMQ publisher 경로 <span class="confidence mid">중간 확신</span></h3>
+            <p>
+              매 1ms마다 datum 복사, metadata 구성, msgpack 직렬화, ZMQ send를 수행한다.
+              full runtime에서 publish가 약 840~916Hz에 머문다.
+            </p>
+          </div>
+        </div>
+      </div>
+
+      <div class="callout warning" style="margin-top: 1rem">
+        <strong>아닌 것:</strong> TDTracker 모델 자체 또는 CUDA Graph capture가 느린 것은 아니다.
+        단독 replay가 1772Hz이므로 모델/graph만 교체하는 접근은 현재 병목을 해결하지 못한다.
+      </div>
+    </section>
+
+    <section id="changes">
+      <div class="eyebrow">Implementation inventory</div>
+      <h2>이번 작업에서 적용한 변경</h2>
+      <table>
+        <thead>
+          <tr><th>영역</th><th>적용 내용</th><th>주요 파일</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>Runner</td>
+            <td>eager / torch.compile / CUDA Graph / auto fallback</td>
+            <td><code>hybrid_runtime.py</code></td>
+          </tr>
+          <tr>
+            <td>DVS worker</td>
+            <td>spawn process, DAVIS read부터 inference까지 inline 처리</td>
+            <td><code>hybrid_runtime.py</code></td>
+          </tr>
+          <tr>
+            <td>CUDA readback</td>
+            <td>pinned CPU slot + CUDA event async result ring</td>
+            <td><code>hybrid_runtime.py</code></td>
+          </tr>
+          <tr>
+            <td>BinaRep</td>
+            <td>NumPy reference + native C, OFF/ON 및 0~15 bit-exact</td>
+            <td><code>_native_binarep.c</code></td>
+          </tr>
+          <tr>
+            <td>Fusion</td>
+            <td>RITnet ellipse anchor + DVS center, threshold 기본 0.3</td>
+            <td><code>detector_2d_hybrid_plugin.py</code></td>
+          </tr>
+          <tr>
+            <td>Publish</td>
+            <td>별도 1000Hz timer, fresh/seq_id 및 latency metadata</td>
+            <td><code>detector_2d_hybrid_plugin.py</code></td>
+          </tr>
+          <tr>
+            <td>Plugin restore</td>
+            <td>기존 세션 Detector2D 설정을 Hybrid detector로 교체</td>
+            <td><code>launchables/eye.py</code></td>
+          </tr>
+          <tr>
+            <td>Affinity</td>
+            <td>main/world/eye/DVS 역할별 CPU affinity 환경변수</td>
+            <td><code>process_affinity.py</code></td>
+          </tr>
+          <tr>
+            <td>Compatibility</td>
+            <td>pye3d default datum, UI key 누락 방지, 400→192 camera fallback</td>
+            <td><code>pye3d_plugin.py</code> 외</td>
+          </tr>
+          <tr>
+            <td>Launcher</td>
+            <td>운영 환경변수와 native build를 한 스크립트로 통합</td>
+            <td><code>run_pupil_hybrid_graph.sh</code></td>
+          </tr>
+        </tbody>
+      </table>
+
+      <details>
+        <summary>실행 중 발견해 수정한 문제</summary>
+        <div>
+          <ul>
+            <li>저장된 Pupil session이 예전 <code>Detector2DPlugin</code>을 복원해 Hybrid가 빠지던 문제</li>
+            <li>ZMQ logging에서 format arguments가 tuple→list로 변환되어 성능 logger가 죽던 문제</li>
+            <li>두 eye process가 동일한 DAVIS를 열 가능성을 막기 위해 기본 DVS eye를 eye 0으로 제한</li>
+            <li>async completion batching 때문에 infer metric이 실제보다 낮게 집계되던 문제</li>
+          </ul>
+        </div>
+      </details>
+    </section>
+
+    <section id="validation">
+      <div class="eyebrow">Evidence</div>
+      <h2>검증 완료 및 미완료 항목</h2>
+      <div class="checklist">
+        <div class="check">Python 문법 및 shell 구문 검사 통과</div>
+        <div class="check">TDTracker checkpoint CPU forward/decode 통과</div>
+        <div class="check">Hybrid plugin import 및 lifecycle 통과</div>
+        <div class="check">20,000 random event native/NumPy bit-exact 통과</div>
+        <div class="check">Native C build 및 단위 테스트 2개 통과</div>
+        <div class="check">실제 DAVIS/NIR/GPU full runtime 실행 성공</div>
+        <div class="check">CUDA Graph 단독 GPU benchmark 완료</div>
+        <div class="check">종료 후 잔여 Pupil/worker process 없음 확인</div>
+        <div class="check pending">Full runtime infer ≥ 990Hz</div>
+        <div class="check pending">Parent fresh state ≥ 990Hz</div>
+        <div class="check pending">Publish ≥ 990Hz 및 drop = 0</div>
+        <div class="check pending">최종 구성으로 5분 이상 latency percentile 수집</div>
+      </div>
+    </section>
+
+    <section id="next">
+      <div class="eyebrow">Recommended experiment matrix</div>
+      <h2>다음 최적화 및 실험 순서</h2>
+      <table>
+        <thead>
+          <tr><th>순서</th><th>실험</th><th>분리하려는 원인</th><th>기대 관측</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>1</td>
+            <td>eye1 RITnet 비활성 또는 CPU fallback</td>
+            <td>두 번째 eye의 GPU 점유</td>
+            <td>CUDA infer가 900Hz 이상으로 회복하는지 확인</td>
+          </tr>
+          <tr>
+            <td>2</td>
+            <td>RITnet 실행 빈도 제한</td>
+            <td>NIR anchor에 필요한 실제 주기</td>
+            <td>정확도 유지 범위에서 GPU duty 감소</td>
+          </tr>
+          <tr>
+            <td>3</td>
+            <td>DVS worker/publisher를 P-core 고정</td>
+            <td>P/E-core migration 및 1ms jitter</td>
+            <td>publish 분산과 state polling 간격 감소</td>
+          </tr>
+          <tr>
+            <td>4</td>
+            <td>CUDA high-priority stream 검증</td>
+            <td>RITnet kernel 사이 TDTracker latency</td>
+            <td>event 완료 batching 감소</td>
+          </tr>
+          <tr>
+            <td>5</td>
+            <td>Result slot 8→16/32 비교</td>
+            <td>GPU completion burst 흡수</td>
+            <td>drop 감소 여부 확인. 근본 해결 여부는 별도 판단</td>
+          </tr>
+          <tr>
+            <td>6</td>
+            <td>Publisher 최소 datum 또는 별도 process</td>
+            <td>GIL/msgpack/ZMQ 비용</td>
+            <td>publish 990Hz 이상</td>
+          </tr>
+          <tr>
+            <td>7</td>
+            <td>각 변경을 full runtime A/B 측정</td>
+            <td>상호작용 및 정확도 영향</td>
+            <td>최종 5분 기준 통과 여부</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <div class="grid" style="margin-top: 1rem">
+        <article class="card wide">
+          <h3>추천 P-core affinity 시작안</h3>
+          <p class="subtle">
+            실제 P/E logical CPU mapping을 <code>lscpu -e</code>로 확인한 뒤 적용해야 한다.
+            아래 값은 예시이며 그대로 사용하면 안 된다.
+          </p>
+          <pre>PUPIL_CPU_AFFINITY_DVS=&lt;P-core 2~4개&gt;
+PUPIL_CPU_AFFINITY_EYE0=&lt;별도 P-core 집합&gt;
+PUPIL_CPU_AFFINITY_WORLD=&lt;나머지 core&gt;</pre>
+        </article>
+        <article class="card wide">
+          <h3>실험 시 고정할 조건</h3>
+          <ul class="compact-list">
+            <li>동일한 DAVIS/NIR 장면과 confidence threshold</li>
+            <li><code>PROFILE_SYNC=0</code> 운영 측정</li>
+            <li>UI on/off를 별도 기록</li>
+            <li>각 케이스 최소 60초, 최종 후보는 5분 이상</li>
+            <li>publish뿐 아니라 seq_id 기반 fresh rate 기록</li>
+          </ul>
+        </article>
+      </div>
+    </section>
+
+    <section id="runbook">
+      <div class="eyebrow">Operations</div>
+      <h2>실행 및 확인 Runbook</h2>
+      <h3>기본 실행</h3>
+      <pre>cd /home/byeongjun/PycharmProjects/pupil
+PUPIL_PYTHON=/home/byeongjun/anaconda3/envs/pupil/bin/python \
+  ./run_pupil_hybrid_graph.sh</pre>
+
+      <h3 style="margin-top: 1.5rem">핵심 기본 환경변수</h3>
+      <pre>PUPIL_HYBRID_ENABLED=1
+PUPIL_HYBRID_DVS_PROCESS=1
+PUPIL_HYBRID_TDTRACKER_MODE=graph
+PUPIL_HYBRID_ASYNC_RESULT=1
+PUPIL_HYBRID_ASYNC_RESULT_SLOTS=8
+PUPIL_HYBRID_CPP_BINAREP=1
+PUPIL_HYBRID_CONF_THRESHOLD=0.3
+PUPIL_HYBRID_DVS_EYE_ID=0
+PUPIL_HYBRID_PROFILE_SYNC=0</pre>
+
+      <h3 style="margin-top: 1.5rem">관찰해야 하는 로그</h3>
+      <pre>Hybrid DVS slice=...Hz submit=...Hz infer=...Hz drop=...
+Hybrid parent state=...Hz publish=...Hz seq=... state_age_ms=... src=...</pre>
+
+      <div class="callout warning" style="margin-top: 1rem">
+        <code>publish≈1000Hz</code>만 보고 성공으로 판단하지 않는다.
+        <code>infer</code>, <code>parent state</code>, <code>drop</code>,
+        <code>state_age_ms</code>를 반드시 함께 본다.
+      </div>
+    </section>
+
+    <footer>
+      이 문서는 2026-07-28 현재 작업 트리와 실제 장비 측정을 기준으로 작성됐다.
+      이전 Xeon/dual-4090 환경의 정확한 GPU process mapping과 CPU affinity 값은 원본
+      실험 로그 또는 실행 스크립트로 추가 확인이 필요하다.
+    </footer>
+  </main>
+</div>
+</body>
+</html>

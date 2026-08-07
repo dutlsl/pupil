@@ -15,6 +15,7 @@ Thumbs.db
 
 #cython build files
 *.c
+!pupil_src/shared_modules/pupil_detector_plugins/_native_binarep.c
 
 # user generated files will be ignored if in directory named 'recordings...' #
 # user generated settings files will also be ignored #

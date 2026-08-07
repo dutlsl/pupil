@@ -70,7 +70,7 @@ class PupilDetectorPlugin(Plugin):
         datum = {}
         datum["id"] = eye_id
         datum["topic"] = f"pupil.{eye_id}.{self.pupil_detection_identifier}"
-        datum["method"] = f"{self.pupil_detection_method}"
+        datum["method"] = getattr(self, "active_model", f"{self.pupil_detection_method}")
         datum["norm_pos"] = norm_pos
         datum["diameter"] = diameter
         datum["confidence"] = confidence
