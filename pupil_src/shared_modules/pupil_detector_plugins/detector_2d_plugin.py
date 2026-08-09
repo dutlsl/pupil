@@ -646,33 +646,59 @@ class Detector2DPlugin(PupilDetectorPlugin):
         
         # --- Handle Accuracy Logging ---
         if getattr(self.g_pool, "eye_id", 0) == 0:
-            if subj == "calibration.successful":
-                rmse_val = "unknown"
-                try:
-                    log_path = os.path.expanduser("~/PycharmProjects/pupil/pupil_capture.log")
-                    if os.path.exists(log_path):
-                        with open(log_path, "r", encoding="utf-8") as lf:
-                            lines = lf.readlines()
-                        for line in reversed(lines):
-                            if "Fitting. RMSE =" in line:
-                                parts = line.split("RMSE =")
-                                if len(parts) > 1:
-                                    rmse_val = parts[1].strip().split("px")[0].strip() + " px"
-                                    break
-                except Exception as ex:
-                    logger.error(f"Failed to parse RMSE from log: {ex}")
+            if subj == "calibration.successful" or subj == "validation.stopped":
+                import threading
+                import time
                 
-                from .experiment_logger import save_accuracy_log
-                active_model = getattr(self, "active_model", "TemporalUNet")
-                save_accuracy_log(self.g_pool, active_model, "calibration", rmse_val)
+                def log_extraction_worker():
+                    time.sleep(0.5)  # Wait 0.5s for logs to flush
+                    try:
+                        log_path = os.path.expanduser("~/PycharmProjects/pupil/pupil_capture.log")
+                        if os.path.exists(log_path):
+                            with open(log_path, "r", encoding="utf-8") as lf:
+                                lines = lf.readlines()
+                            
+                            if subj == "calibration.successful":
+                                rmse_val = "unknown"
+                                for line in reversed(lines):
+                                    if "Fitting. RMSE =" in line:
+                                        parts = line.split("RMSE =")
+                                        if len(parts) > 1:
+                                            rmse_val = parts[1].strip().split("px")[0].strip() + " px"
+                                            break
+                                from .experiment_logger import save_accuracy_log
+                                active_model = getattr(self, "active_model", "Mamba3 (T=5)")
+                                save_accuracy_log(self.g_pool, active_model, "calibration", rmse_val)
+                                
+                            elif subj == "validation.stopped":
+                                accuracy_val = None
+                                precision_val = None
+                                for line in reversed(lines):
+                                    if "accuracy_visualizer: Angular accuracy:" in line:
+                                        parts = line.split("accuracy:")
+                                        if len(parts) > 1:
+                                            try:
+                                                accuracy_val = float(parts[1].strip().split("degrees")[0].strip())
+                                            except Exception:
+                                                pass
+                                    elif "accuracy_visualizer: Angular precision:" in line:
+                                        parts = line.split("precision:")
+                                        if len(parts) > 1:
+                                            try:
+                                                precision_val = float(parts[1].strip().split("degrees")[0].strip())
+                                            except Exception:
+                                                pass
+                                    if accuracy_val is not None and precision_val is not None:
+                                        break
+                                
+                                if accuracy_val is not None:
+                                    from .experiment_logger import save_accuracy_log
+                                    active_model = getattr(self, "active_model", "Mamba3 (T=5)")
+                                    save_accuracy_log(self.g_pool, active_model, "test", accuracy_val, precision_value=precision_val)
+                    except Exception as ex:
+                        logger.error(f"Failed in log_extraction_worker: {ex}")
                 
-            elif subj == "accuracy_visualizer.data":
-                accuracy = notification.get("accuracy")
-                precision = notification.get("precision")
-                if accuracy is not None:
-                    from .experiment_logger import save_accuracy_log
-                    active_model = getattr(self, "active_model", "TemporalUNet")
-                    save_accuracy_log(self.g_pool, active_model, "test", accuracy, precision_value=precision)
+                threading.Thread(target=log_extraction_worker, daemon=True).start()
         
         if "calibration" in subj and (subj.endswith(".should_start") or subj.endswith(".started")):
             if hasattr(self, "temporal_model") and self.temporal_model is not None:

@@ -1,5 +1,6 @@
 import os
 import sys
+import time
 
 # Path setup
 PUPIL_SRC = "pupil_src"
@@ -16,10 +17,12 @@ if not hasattr(torch, "float4_e2m1fn_x2"):
 if not hasattr(torch, "float8_e8m0fnu"):
     torch.float8_e8m0fnu = "dummy_float8_e8m0fnu"
 
-# Create a dummy pupil_capture.log to test RMSE extraction
+# Create a dummy pupil_capture.log to test extraction of both RMSE and accuracy/precision
 with open("pupil_capture.log", "w", encoding="utf-8") as f:
     f.write("Some logging info...\n")
     f.write("Fitting. RMSE =    3.45px in final iteration.\n")
+    f.write("accuracy_visualizer: Angular accuracy: 0.721 degrees\n")
+    f.write("accuracy_visualizer: Angular precision: 0.221 degrees\n")
 
 from pupil_detector_plugins.detector_2d_plugin import Detector2DPlugin
 
@@ -36,7 +39,7 @@ def test():
     print("Testing Detector2DPlugin on_notify accuracy logging...")
     g_pool = DummyGPool()
     plugin = Detector2DPlugin(g_pool=g_pool)
-    plugin.active_model = "nnUNet Vivim (Mamba)"
+    plugin.active_model = "Mamba3 (T=5)"
     
     # Clean up old logs to be precise
     if os.path.exists("recordings"):
@@ -48,13 +51,13 @@ def test():
     print("Triggering calibration.successful...")
     plugin.on_notify({"subject": "calibration.successful"})
     
-    # 2. Trigger accuracy_visualizer.data
-    print("Triggering accuracy_visualizer.data...")
-    plugin.on_notify({
-        "subject": "accuracy_visualizer.data",
-        "accuracy": 0.456,
-        "precision": 0.123
-    })
+    # 2. Trigger validation.stopped
+    print("Triggering validation.stopped...")
+    plugin.on_notify({"subject": "validation.stopped"})
+    
+    # Wait for the background extraction threads to finish
+    print("Waiting 1.0 second for background threads...")
+    time.sleep(1.0)
     
     # Check created logs
     recs = [f for f in os.listdir("recordings") if f.endswith(".log")]

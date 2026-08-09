@@ -90,7 +90,7 @@ class Model2D(Model):
                     outlier_removal_iterations=outlier_removal_iterations - 1,
                 )
 
-        logger.debug(f"Fitting. RMSE = {rmse:>7.2f}px in final iteration.")
+        logger.info(f"Fitting. RMSE = {rmse:>7.2f}px in final iteration.")
         self._is_fitted = True
 
     def _test_pixel_error(self, X, Y):
