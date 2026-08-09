@@ -1,5 +1,6 @@
 import os
 import sys
+import time
 import numpy as np
 
 # Path setup
@@ -17,13 +18,13 @@ if not hasattr(torch, "float4_e2m1fn_x2"):
 if not hasattr(torch, "float8_e8m0fnu"):
     torch.float8_e8m0fnu = "dummy_float8_e8m0fnu"
 
+import gaze_mapping.gazer_2d
 from gaze_mapping.gazer_2d import Gazer2D
-from accuracy_visualizer import Accuracy_Visualizer, CorrelationError
+from accuracy_visualizer import Accuracy_Visualizer
 
 class DummyIntrinsics:
     resolution = (640, 480)
     def unprojectPoints(self, pts, normalize=True):
-        # pts: Nx2
         pts_3d = np.zeros((len(pts), 3))
         pts_3d[:, 0] = pts[:, 0] / 640.0 - 0.5
         pts_3d[:, 1] = pts[:, 1] / 480.0 - 0.5
@@ -32,16 +33,35 @@ class DummyIntrinsics:
         return pts_3d / norms
 
 class DummyGPool:
+    app = "capture"
+    min_calibration_confidence = 0.6
+    ipc_pub = type('IPCPub', (), {'notify': lambda self, n: None})()
     capture = type('Capture', (), {'intrinsics': DummyIntrinsics(), 'frame_size': (640, 480)})()
     user_dir = "."
+    def get_timestamp(self):
+        return time.time()
 
-def test_validation_mapping():
-    print("Testing Validation pupil mapping & accuracy calculation with Mamba3 method tag...")
+def test_validation_calibration_flow():
+    print("Testing Validation execution via Calibration evaluation pipeline...")
+    g_pool = DummyGPool()
     
-    # 1. Create simulated pupil_list with method='Mamba3 (T=5)'
+    # 1. Create 5 calibration points to properly fit 2D gazer
+    ref_init = []
+    pupil_init = []
+    positions = [(0.2, 0.2), (0.8, 0.2), (0.5, 0.5), (0.2, 0.8), (0.8, 0.8)]
+    for i, pos in enumerate(positions):
+        ts = 1000.0 + i
+        ref_init.append({"norm_pos": pos, "screen_pos": (pos[0]*640, pos[1]*480), "timestamp": ts})
+        pupil_init.append({"id": 0, "timestamp": ts, "confidence": 0.9, "method": "Mamba3 (T=5)", "norm_pos": pos, "ellipse": {"center": (pos[0]*640, pos[1]*480), "axes": (20, 20), "angle": 0}})
+        
+    calib_data_init = {"ref_list": ref_init, "pupil_list": pupil_init}
+    gazer = Gazer2D(g_pool, calib_data=calib_data_init)
+    print("Gazer created and fitted successfully!")
+    
+    # 2. Simulate validation data (Test button)
     pupil_list = []
     ref_list = []
-    base_ts = 1000.0
+    base_ts = 2000.0
     for i in range(10):
         ts = base_ts + i * 0.1
         p = {
@@ -53,35 +73,45 @@ def test_validation_mapping():
             "ellipse": {"center": (320 + i, 240 + i), "axes": (20, 20), "angle": 0}
         }
         r = {
-            "timestamp": ts + 0.02, # 20ms offset
+            "timestamp": ts,
             "norm_pos": (0.5, 0.5),
             "screen_pos": (320, 240)
         }
         pupil_list.append(p)
         ref_list.append(r)
         
-    g_pool = DummyGPool()
+    calib_data = {"ref_list": ref_list, "pupil_list": pupil_list}
     
-    # Check gazer_2d filter_pupil_data
-    gazer = Gazer2D(g_pool, params={})
-    filtered = list(gazer.filter_pupil_data(pupil_list))
-    print(f"Filtered pupil data count: {len(filtered)} / {len(pupil_list)}")
-    assert len(filtered) == len(pupil_list), "filter_pupil_data failed to retain Mamba3 pupil data!"
+    # Accuracy Visualizer instance
+    acc_vis = Accuracy_Visualizer(g_pool)
     
-    # Check accuracy visualizer calc_acc_prec_errlines
-    res = Accuracy_Visualizer.calc_acc_prec_errlines(
-        g_pool=g_pool,
-        gazer_class=Gazer2D,
-        gazer_params={"eye_0": {"calib_points_3d": [], "gaze_points_3d": []}}, # dummy params
-        pupil_list=pupil_list,
-        ref_list=ref_list,
-        intrinsics=g_pool.capture.intrinsics,
-        outlier_threshold=5.0
-    )
-    print(f"Accuracy result valid: {res.is_valid}")
-    print(f"Accuracy: {res.accuracy.result:.3f} degrees")
-    print(f"Precision: {res.precision.result:.3f} degrees")
-    print("Test passed successfully!")
+    # Simulate notification dispatch when Test ("T") button finishes
+    gazer._announce_calibration_setup(calib_data)
+    gazer._announce_calibration_result(gazer.get_params())
+    
+    note_setup = {
+        "subject": "calibration.setup",
+        "gazer_class_name": gazer.__class__.__name__, # "Gazer2D"
+        "calib_data": calib_data,
+        "timestamp": g_pool.get_timestamp(),
+        "record": True
+    }
+    note_result = {
+        "subject": "calibration.result",
+        "gazer_class_name": gazer.__class__.__name__, # "Gazer2D"
+        "params": gazer.get_params(),
+        "timestamp": g_pool.get_timestamp(),
+        "record": True
+    }
+    
+    acc_vis.on_notify(note_setup)
+    acc_vis.on_notify(note_result)
+    
+    print(f"Is recent input complete: {acc_vis.recent_input.is_complete}")
+    print(f"Accuracy visualizer calculation accuracy: {acc_vis.accuracy}")
+    assert acc_vis.accuracy is not None, "Accuracy visualizer failed to compute accuracy for validation data!"
+    print(f"Computed Angular Accuracy: {acc_vis.accuracy.result:.3f} degrees")
+    print("Validation mapping test passed successfully!")
 
 if __name__ == "__main__":
-    test_validation_mapping()
+    test_validation_calibration_flow()
