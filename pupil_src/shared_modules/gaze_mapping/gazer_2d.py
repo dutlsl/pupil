@@ -245,6 +245,11 @@ class Gazer2D(GazerBase):
     def filter_pupil_data(
         self, pupil_data: T.Iterable, confidence_threshold: T.Optional[float] = None
     ) -> T.Iterable:
-        pupil_data = list(filter(lambda p: "2d" in p["method"], pupil_data))
+        pupil_data = list(
+            filter(
+                lambda p: "3d" not in str(p.get("method", "")).lower(),
+                pupil_data,
+            )
+        )
         pupil_data = super().filter_pupil_data(pupil_data, confidence_threshold)
         return pupil_data

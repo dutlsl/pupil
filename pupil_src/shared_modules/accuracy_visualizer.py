@@ -512,7 +512,18 @@ class Accuracy_Visualizer(Plugin):
         # reuse closest_matches_monocular to correlate one label to each prediction
         # correlated['ref']: prediction, correlated['pupil']: label location
         # NOTE the switch of the ref and pupil keys! This effects mostly hmd data.
-        correlated = closest_matches_monocular(gaze_pos, ref_pos)
+        gaze_list = list(gaze_pos) if not isinstance(gaze_pos, list) else gaze_pos
+        ref_list = list(ref_pos) if not isinstance(ref_pos, list) else ref_pos
+
+        correlated = closest_matches_monocular(gaze_list, ref_list)
+        if not correlated:
+            for relaxed_dispersion in (0.2, 0.5, 1.0, 2.0):
+                correlated = closest_matches_monocular(
+                    gaze_list, ref_list, max_dispersion=relaxed_dispersion
+                )
+                if correlated:
+                    break
+
         # [[pred.x, pred.y, label.x, label.y], ...], shape: n x 4
         if not correlated:
             raise CorrelationError("No correlation possible")
