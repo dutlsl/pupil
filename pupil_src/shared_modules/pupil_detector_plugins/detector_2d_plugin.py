@@ -658,43 +658,73 @@ class Detector2DPlugin(PupilDetectorPlugin):
                             with open(log_path, "r", encoding="utf-8") as lf:
                                 lines = lf.readlines()
                             
+                            active_model = getattr(self, "active_model", "Mamba3 (T=5)")
+                            from .experiment_logger import save_accuracy_log
+                            
                             if subj == "calibration.successful":
-                                rmse_val = "unknown"
-                                for line in reversed(lines):
-                                    if "Fitting. RMSE =" in line:
-                                        parts = line.split("RMSE =")
-                                        if len(parts) > 1:
-                                            rmse_val = parts[1].strip().split("px")[0].strip() + " px"
-                                            break
-                                from .experiment_logger import save_accuracy_log
-                                active_model = getattr(self, "active_model", "Mamba3 (T=5)")
-                                save_accuracy_log(self.g_pool, active_model, "calibration", rmse_val)
-                                
-                            elif subj == "validation.stopped":
+                                rmse_val = None
                                 accuracy_val = None
                                 precision_val = None
                                 for line in reversed(lines):
-                                    if "accuracy_visualizer: Angular accuracy:" in line:
+                                    if "Fitting. RMSE =" in line and rmse_val is None:
+                                        parts = line.split("RMSE =")
+                                        if len(parts) > 1:
+                                            rmse_val = parts[1].strip().split("px")[0].strip() + " px"
+                                    elif "accuracy_visualizer: Angular accuracy:" in line and accuracy_val is None:
                                         parts = line.split("accuracy:")
                                         if len(parts) > 1:
                                             try:
                                                 accuracy_val = float(parts[1].strip().split("degrees")[0].strip())
                                             except Exception:
                                                 pass
-                                    elif "accuracy_visualizer: Angular precision:" in line:
+                                    elif "accuracy_visualizer: Angular precision:" in line and precision_val is None:
                                         parts = line.split("precision:")
                                         if len(parts) > 1:
                                             try:
                                                 precision_val = float(parts[1].strip().split("degrees")[0].strip())
                                             except Exception:
                                                 pass
-                                    if accuracy_val is not None and precision_val is not None:
+                                    if "Starting  Calibration" in line or "Starting  Validation" in line:
+                                        break
+                                
+                                save_accuracy_log(
+                                    g_pool=self.g_pool,
+                                    active_model=active_model,
+                                    exp_type="calibration",
+                                    accuracy_value=accuracy_val,
+                                    precision_value=precision_val,
+                                    rmse_value=rmse_val
+                                )
+                                
+                            elif subj == "validation.stopped":
+                                accuracy_val = None
+                                precision_val = None
+                                for line in reversed(lines):
+                                    if "accuracy_visualizer: Angular accuracy:" in line and accuracy_val is None:
+                                        parts = line.split("accuracy:")
+                                        if len(parts) > 1:
+                                            try:
+                                                accuracy_val = float(parts[1].strip().split("degrees")[0].strip())
+                                            except Exception:
+                                                pass
+                                    elif "accuracy_visualizer: Angular precision:" in line and precision_val is None:
+                                        parts = line.split("precision:")
+                                        if len(parts) > 1:
+                                            try:
+                                                precision_val = float(parts[1].strip().split("degrees")[0].strip())
+                                            except Exception:
+                                                pass
+                                    if "Starting  Validation" in line:
                                         break
                                 
                                 if accuracy_val is not None:
-                                    from .experiment_logger import save_accuracy_log
-                                    active_model = getattr(self, "active_model", "Mamba3 (T=5)")
-                                    save_accuracy_log(self.g_pool, active_model, "test", accuracy_val, precision_value=precision_val)
+                                    save_accuracy_log(
+                                        g_pool=self.g_pool,
+                                        active_model=active_model,
+                                        exp_type="test",
+                                        accuracy_value=accuracy_val,
+                                        precision_value=precision_val
+                                    )
                     except Exception as ex:
                         logger.error(f"Failed in log_extraction_worker: {ex}")
                 

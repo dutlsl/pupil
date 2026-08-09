@@ -17,13 +17,6 @@ if not hasattr(torch, "float4_e2m1fn_x2"):
 if not hasattr(torch, "float8_e8m0fnu"):
     torch.float8_e8m0fnu = "dummy_float8_e8m0fnu"
 
-# Create a dummy pupil_capture.log to test extraction of both RMSE and accuracy/precision
-with open("pupil_capture.log", "w", encoding="utf-8") as f:
-    f.write("Some logging info...\n")
-    f.write("Fitting. RMSE =    3.45px in final iteration.\n")
-    f.write("accuracy_visualizer: Angular accuracy: 0.721 degrees\n")
-    f.write("accuracy_visualizer: Angular precision: 0.221 degrees\n")
-
 from pupil_detector_plugins.detector_2d_plugin import Detector2DPlugin
 
 class DummyRoi:
@@ -46,21 +39,33 @@ def test():
         for f in os.listdir("recordings"):
             if f.endswith(".log"):
                 os.remove(os.path.join("recordings", f))
-    
-    # 1. Trigger calibration.successful
+                
+    # 1. Simulate Calibration Run
+    print("Simulating Calibration logging...")
+    with open("pupil_capture.log", "w", encoding="utf-8") as f:
+        f.write("Some logging info...\n")
+        f.write("Starting  Calibration\n")
+        f.write("Fitting. RMSE =    3.45px in final iteration.\n")
+        f.write("accuracy_visualizer: Angular accuracy: 0.721 degrees\n")
+        f.write("accuracy_visualizer: Angular precision: 0.221 degrees\n")
+        
     print("Triggering calibration.successful...")
     plugin.on_notify({"subject": "calibration.successful"})
+    time.sleep(0.6) # Let thread finish
     
-    # 2. Trigger validation.stopped
+    # 2. Simulate Validation Run
+    print("Simulating Validation logging...")
+    with open("pupil_capture.log", "a", encoding="utf-8") as f:
+        f.write("Starting  Validation\n")
+        f.write("accuracy_visualizer: Angular accuracy: 1.028 degrees\n")
+        f.write("accuracy_visualizer: Angular precision: 0.195 degrees\n")
+        
     print("Triggering validation.stopped...")
     plugin.on_notify({"subject": "validation.stopped"})
-    
-    # Wait for the background extraction threads to finish
-    print("Waiting 1.0 second for background threads...")
-    time.sleep(1.0)
+    time.sleep(0.6) # Let thread finish
     
     # Check created logs
-    recs = [f for f in os.listdir("recordings") if f.endswith(".log")]
+    recs = sorted([f for f in os.listdir("recordings") if f.endswith(".log")])
     print("\nCreated log files:")
     for f in recs:
         print(f" - {f}")
