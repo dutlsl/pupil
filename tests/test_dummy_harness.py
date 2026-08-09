@@ -54,21 +54,13 @@ def run_harness():
     plugin = Detector2DPlugin(g_pool=g_pool)
 
     # STRICT MODEL INTEGRITY ASSERTIONS
-    model_attr_map = {
-        "TemporalUNet": "temporal_model",
-        "nnUNet Vivim (Mamba)": "vivim_model",
-        "nnUNet 2D": "vanilla_2d_model",
-        "RITnet": "ritnet_model",
-    }
+    assert plugin.ritnet_model is not None, "❌ RITnet failed to load!"
+    print("   ✓ Verified model 'RITnet' is loaded and ready.")
 
-    print("\n🔍 Verifying Model Object Loading Integrity...")
-    for m_name, attr_name in model_attr_map.items():
-        model_obj = getattr(plugin, attr_name, None)
-        assert model_obj is not None, (
-            f"❌ CRITICAL HARNESS FAILURE: Model '{m_name}' ({attr_name}) "
-            f"failed to load / is None! Check dependencies & weights!"
-        )
-        print(f"   ✓ Verified model '{m_name}' ({attr_name}) is loaded and ready.")
+    assert hasattr(plugin, "vivim_models") and plugin.vivim_models is not None, "❌ vivim_models dict not found!"
+    for t in [3, 5, 7, 9, 11]:
+        assert t in plugin.vivim_models, f"❌ Mamba3 T={t} failed to load / is None!"
+        print(f"   ✓ Verified model 'Mamba3 (T={t})' is loaded and ready.")
 
     print("✅ Plugin & All Models Loaded Successfully.")
 
@@ -78,7 +70,7 @@ def run_harness():
         ("OpenEDS Dataset Native (400x640)", 400, 640),
     ]
 
-    models = ["TemporalUNet", "nnUNet Vivim (Mamba)", "nnUNet 2D", "RITnet", "2D C++"]
+    models = ["RITnet", "2D C++", "Mamba3 (T=3)", "Mamba3 (T=5)", "Mamba3 (T=7)", "Mamba3 (T=9)", "Mamba3 (T=11)"]
 
     print("\n[2/3] Executing Dummy USB Video Stream & Streaming Inference Tests...")
     for res_name, h, w in resolutions:
@@ -92,11 +84,11 @@ def run_harness():
             print(f"\n▶ Model Mode: {model_name}")
             plugin.active_model = model_name
 
-            if model_name in model_attr_map:
-                attr = model_attr_map[model_name]
-                assert getattr(plugin, attr, None) is not None, (
-                    f"❌ CRITICAL INTEGRITY FAILURE: {model_name} ({attr}) is None! Cannot perform inference!"
-                )
+            if model_name.startswith("Mamba3 (T="):
+                t_val = int(model_name.split("T=")[1].replace(")", ""))
+                assert t_val in plugin.vivim_models, f"❌ Mamba3 T={t_val} is None!"
+            elif model_name == "RITnet":
+                assert plugin.ritnet_model is not None, "❌ RITnet is None!"
 
             latencies = []
             for frame_idx in range(1, 6):

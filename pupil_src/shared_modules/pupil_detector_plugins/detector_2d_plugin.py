@@ -112,7 +112,7 @@ class Detector2DPlugin(PupilDetectorPlugin):
         self.device = torch.device(device_str)
 
         # UI Control States
-        self.active_model = "TemporalUNet"
+        self.active_model = "Mamba3 (T=5)"
         self.flip_vertically = False
         self.flip_horizontally = False
 
@@ -125,93 +125,51 @@ class Detector2DPlugin(PupilDetectorPlugin):
         self._smooth_alpha = 0.4
         self._consecutive_jumps = 0
 
-        # Load Models (TemporalUNet as primary, Vivim Mamba, nnUNet 2D vanilla as secondary, RITnet as fallback)
-        self.temporal_model = None
-        self.vanilla_2d_model = None
-        self.vivim_model = None
-        self._vivim_queue = collections.deque(maxlen=5)
+        # Load Models (Mamba3 T=3,5,7,9,11 models, RITnet as fallback)
+        self.vivim_models = {}
+        self._vivim_queues = {t: collections.deque(maxlen=t) for t in [3, 5, 7, 9, 11]}
         self._init_nnunet_models()
         self._init_ritnet_model()
 
     def _init_nnunet_models(self):
         try:
-            logger.info("Initializing TemporalUNet, Vivim Mamba, and 2D nnUNet models...")
-            from temporal_unet import TemporalUNet
+            logger.info("Initializing Vivim Mamba3 models (T=3, 5, 7, 9, 11)...")
 
-            model_dir = os.path.join(
-                NNUNET_DIR,
-                "nnUNet_results",
-                "Dataset600_OpenEDS2019",
-                "nnUNetTrainer_ImageNetPretrained__nnUNetPlans__2d"
-            )
-            temporal_ckpt = os.path.join(
-                NNUNET_DIR,
-                "nnUNet_results",
-                "TemporalUNet_v1",
-                "checkpoint_best.pth"
-            )
+            self.vivim_ckpts = {
+                3: os.path.join(NNUNET_DIR, "nnUNet_results", "Dataset600_OpenEDS2019", "nnUNetTrainer_Vivim__nnUNetPlans__2d", "fold_1", "checkpoint_best.pth"),
+                5: os.path.join(NNUNET_DIR, "nnUNet_results", "Dataset600_OpenEDS2019", "nnUNetTrainer_Vivim_T5__nnUNetPlans__2d", "fold_1", "checkpoint_best.pth"),
+                7: os.path.join(NNUNET_DIR, "nnUNet_results", "Dataset600_OpenEDS2019", "nnUNetTrainer_Vivim__nnUNetPlans__2d", "fold_1_T7", "checkpoint_best.pth"),
+                9: os.path.join(NNUNET_DIR, "nnUNet_results", "Dataset600_OpenEDS2019", "nnUNetTrainer_Vivim__nnUNetPlans__2d", "fold_1_T9", "checkpoint_best.pth"),
+                11: os.path.join(NNUNET_DIR, "nnUNet_results", "Dataset600_OpenEDS2019", "nnUNetTrainer_Vivim__nnUNetPlans__2d", "fold_1_T11", "checkpoint_best.pth"),
+            }
 
-            if os.path.exists(model_dir) and os.path.exists(temporal_ckpt):
-                self.temporal_model = TemporalUNet.from_pretrained(
-                    model_folder=model_dir,
-                    checkpoint_name='checkpoint_best.pth',
-                    num_classes=4,
-                    deep_supervision=False,
-                    device=self.device,
-                )
-                ckpt = torch.load(temporal_ckpt, map_location=self.device, weights_only=False)
-                if 'model_state_dict' in ckpt:
-                    self.temporal_model.load_state_dict(ckpt['model_state_dict'])
+            from models.vivim_backbone import VivimBackbone
+            self.vivim_models = {}
+            for t, ckpt_path in self.vivim_ckpts.items():
+                if os.path.exists(ckpt_path):
+                    model = VivimBackbone(
+                        in_channels=1,
+                        num_classes=4,
+                        base_channels=32,
+                        d_state=16,
+                        d_conv=4,
+                        expand=2,
+                        use_mamba=True,
+                    ).to(self.device)
+                    ckpt = torch.load(ckpt_path, map_location=self.device, weights_only=False)
+                    state_dict = ckpt.get("network_weights", ckpt.get("model_state_dict", ckpt))
+                    new_state_dict = {}
+                    for k, v in state_dict.items():
+                        if k.startswith("backbone."):
+                            new_state_dict[k[len("backbone."):]] = v
+                        else:
+                            new_state_dict[k] = v
+                    model.load_state_dict(new_state_dict, strict=False)
+                    model.eval()
+                    self.vivim_models[t] = model
+                    logger.info(f"✅ nnUNet Vivim Mamba3 T={t} model initialized successfully.")
                 else:
-                    self.temporal_model.load_state_dict(ckpt)
-
-                self.temporal_model.eval()
-                self.temporal_model.to(self.device)
-                self.temporal_model.reset_temporal_state()
-
-                # Extract vanilla 2D model from encoder/pretrained network
-                if hasattr(self.temporal_model, 'pretrained_unet'):
-                    self.vanilla_2d_model = self.temporal_model.pretrained_unet
-                else:
-                    self.vanilla_2d_model = self.temporal_model.encoder
-
-                logger.info("✅ TemporalUNet & 2D nnUNet initialized successfully.")
-            else:
-                logger.warning(f"nnUNet paths not found: model_dir={model_dir}, temporal_ckpt={temporal_ckpt}")
-
-            # Initialize Vivim (Video Vision Mamba) Model
-            vivim_ckpt = os.path.join(
-                NNUNET_DIR,
-                "nnUNet_results",
-                "Dataset600_OpenEDS2019",
-                "nnUNetTrainer_Vivim_T5__nnUNetPlans__2d",
-                "fold_1",
-                "checkpoint_best.pth"
-            )
-            if os.path.exists(vivim_ckpt):
-                from models.vivim_backbone import VivimBackbone
-                self.vivim_model = VivimBackbone(
-                    in_channels=1,
-                    num_classes=4,
-                    base_channels=32,
-                    d_state=16,
-                    d_conv=4,
-                    expand=2,
-                    use_mamba=True,
-                ).to(self.device)
-                ckpt = torch.load(vivim_ckpt, map_location=self.device, weights_only=False)
-                state_dict = ckpt.get("network_weights", ckpt.get("model_state_dict", ckpt))
-                new_state_dict = {}
-                for k, v in state_dict.items():
-                    if k.startswith("backbone."):
-                        new_state_dict[k[len("backbone."):]] = v
-                    else:
-                        new_state_dict[k] = v
-                self.vivim_model.load_state_dict(new_state_dict, strict=False)
-                self.vivim_model.eval()
-                logger.info("✅ nnUNet Vivim (Video Vision Mamba) initialized successfully.")
-            else:
-                logger.warning(f"Vivim checkpoint not found at {vivim_ckpt}")
+                    logger.warning(f"Vivim T={t} checkpoint not found at {ckpt_path}")
         except Exception as e:
             logger.error(f"Failed to initialize nnUNet models: {e}")
 
@@ -253,33 +211,20 @@ class Detector2DPlugin(PupilDetectorPlugin):
         return init_dict
 
     def detect(self, frame, **kwargs):
-        active = getattr(self, "active_model", "TemporalUNet")
-        if active == "TemporalUNet":
-            if self.temporal_model is None:
-                if not getattr(self, "_logged_missing_temporal", False):
-                    logger.error("❌ Active model 'TemporalUNet' is not loaded or failed initialization!")
-                    self._logged_missing_temporal = True
+        active = getattr(self, "active_model", "Mamba3 (T=5)")
+        if active.startswith("Mamba3 (T="):
+            try:
+                t_val = int(active.split("T=")[1].replace(")", ""))
+            except Exception:
+                t_val = 5
+            model = self.vivim_models.get(t_val)
+            if model is None:
+                if not getattr(self, f"_logged_missing_mamba3_t{t_val}", False):
+                    logger.error(f"❌ Active model '{active}' is not loaded or failed initialization!")
+                    setattr(self, f"_logged_missing_mamba3_t{t_val}", True)
                 return self._empty_datum(frame)
-            self._logged_missing_temporal = False
-            return self._detect_temporal_unet(frame, **kwargs)
-
-        elif active == "nnUNet Vivim (Mamba)":
-            if self.vivim_model is None:
-                if not getattr(self, "_logged_missing_vivim", False):
-                    logger.error("❌ Active model 'nnUNet Vivim (Mamba)' is not loaded or failed initialization!")
-                    self._logged_missing_vivim = True
-                return self._empty_datum(frame)
-            self._logged_missing_vivim = False
-            return self._detect_vivim_mamba(frame, **kwargs)
-
-        elif active == "nnUNet 2D":
-            if self.vanilla_2d_model is None:
-                if not getattr(self, "_logged_missing_vanilla", False):
-                    logger.error("❌ Active model 'nnUNet 2D' is not loaded or failed initialization!")
-                    self._logged_missing_vanilla = True
-                return self._empty_datum(frame)
-            self._logged_missing_vanilla = False
-            return self._detect_nnunet_2d(frame, **kwargs)
+            setattr(self, f"_logged_missing_mamba3_t{t_val}", False)
+            return self._detect_vivim_mamba_by_t(frame, model, t_val, **kwargs)
 
         elif active == "RITnet":
             if self.ritnet_model is None:
@@ -410,9 +355,9 @@ class Detector2DPlugin(PupilDetectorPlugin):
 
         return self._postprocess_mask_to_datum(pred_mask, frame, orig_h, orig_w, flip_v, flip_h, is_letterboxed)
 
-    def _detect_vivim_mamba(self, frame, **kwargs):
+    def _detect_vivim_mamba_by_t(self, frame, model, t_val, **kwargs):
         gray = frame.gray
-        if gray is None or self.vivim_model is None:
+        if gray is None or model is None:
             return self._empty_datum(frame)
 
         gray = gray.astype(np.uint8)
@@ -442,15 +387,16 @@ class Detector2DPlugin(PupilDetectorPlugin):
         canvas[24:424, 24:424] = img_400
         t_tensor = torch.from_numpy(canvas).unsqueeze(0).to(self.device)  # [1, 448, 448]
 
-        self._vivim_queue.append(t_tensor)
-        while len(self._vivim_queue) < 5:
-            self._vivim_queue.append(t_tensor)
+        queue = self._vivim_queues[t_val]
+        queue.append(t_tensor)
+        while len(queue) < t_val:
+            queue.append(t_tensor)
 
-        seq_list = list(self._vivim_queue)
-        seq_tensor = torch.stack(seq_list, dim=1).unsqueeze(2)  # [1, 5, 1, 448, 448]
+        seq_list = list(queue)
+        seq_tensor = torch.stack(seq_list, dim=1).unsqueeze(2)  # [1, T, 1, 448, 448]
 
         with torch.inference_mode():
-            logits = self.vivim_model(seq_tensor.float())
+            logits = model(seq_tensor.float())
 
             if isinstance(logits, (list, tuple)):
                 logits = logits[0]
@@ -632,7 +578,7 @@ class Detector2DPlugin(PupilDetectorPlugin):
                 "active_model",
                 self,
                 label="Active Model",
-                selection=["TemporalUNet", "nnUNet Vivim (Mamba)", "nnUNet 2D", "RITnet", "2D C++"],
+                selection=["RITnet", "2D C++", "Mamba3 (T=3)", "Mamba3 (T=5)", "Mamba3 (T=7)", "Mamba3 (T=9)", "Mamba3 (T=11)"],
             )
         )
         self.menu.append(ui.Switch("flip_vertically", self, label="Flip Vertically (Eye 0)"))
