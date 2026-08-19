@@ -70,7 +70,7 @@ if "numpy._core" not in sys.modules and hasattr(np, "core"):
     sys.modules["numpy._core"] = np.core
     if hasattr(np.core, "multiarray"):
         sys.modules["numpy._core.multiarray"] = np.core.multiarray
-
+# TODO: Should I change nnUNet dataset num to 250?
 PUPIL_CLASS_ID = 3  # OpenEDS labels: background=0, sclera=1, iris=2, pupil=3
 MEAN_VAL = 86.45
 STD_VAL = 39.94
