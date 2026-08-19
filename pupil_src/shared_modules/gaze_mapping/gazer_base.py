@@ -312,9 +312,13 @@ class GazerBase(abc.ABC, Plugin):
             record=True,
         )
         note_dict = note.as_dict()
-        if hasattr(self.g_pool, "user_dir"):
-            file_path = os.path.join(self.g_pool.user_dir, note.file_name())
-            fm.save_object(note_dict, file_path)
+        if hasattr(self.g_pool, "user_dir") and self.g_pool.user_dir:
+            try:
+                file_path = os.path.join(self.g_pool.user_dir, note.file_name())
+                os.makedirs(os.path.dirname(file_path), exist_ok=True)
+                fm.save_object(note_dict, file_path)
+            except Exception as err:
+                logger.debug(f"Failed to save calibration setup note to disk: {err}")
         self.notify_all(note_dict)
 
     def _announce_calibration_result(self, params):
@@ -325,9 +329,13 @@ class GazerBase(abc.ABC, Plugin):
             record=True,
         )
         note_dict = note.as_dict()
-        if hasattr(self.g_pool, "user_dir"):
-            file_path = os.path.join(self.g_pool.user_dir, note.file_name())
-            fm.save_object(note_dict, file_path)
+        if hasattr(self.g_pool, "user_dir") and self.g_pool.user_dir:
+            try:
+                file_path = os.path.join(self.g_pool.user_dir, note.file_name())
+                os.makedirs(os.path.dirname(file_path), exist_ok=True)
+                fm.save_object(note_dict, file_path)
+            except Exception as err:
+                logger.debug(f"Failed to save calibration result note to disk: {err}")
         self.notify_all(note_dict)
 
     def _fit_binocular_model(self, model: Model, matched_data: T.Iterable):

@@ -74,21 +74,28 @@ def closest_matches_binocular_batch(ref_pts, pupil0, pupil1, max_dispersion=1 / 
     pupil0_ts = np.array([p["timestamp"] for p in pupil0])
     pupil1_ts = np.array([p["timestamp"] for p in pupil1])
 
-    for r in ref_pts:
-        closest_p0_idx = _find_nearest_idx(pupil0_ts, r["timestamp"])
-        closest_p0 = pupil0[closest_p0_idx]
-        closest_p1_idx = _find_nearest_idx(pupil1_ts, r["timestamp"])
-        closest_p1 = pupil1[closest_p1_idx]
+    for dispersion_threshold in (max_dispersion, 0.2, 0.5, 1.0, 2.0):
+        current_matched = [[], [], []]
+        for r in ref_pts:
+            closest_p0_idx = _find_nearest_idx(pupil0_ts, r["timestamp"])
+            closest_p0 = pupil0[closest_p0_idx]
+            closest_p1_idx = _find_nearest_idx(pupil1_ts, r["timestamp"])
+            closest_p1 = pupil1[closest_p1_idx]
 
-        dispersion = max(
-            closest_p0["timestamp"], closest_p1["timestamp"], r["timestamp"]
-        ) - min(closest_p0["timestamp"], closest_p1["timestamp"], r["timestamp"])
-        if dispersion < max_dispersion:
-            matched[0].append(r)
-            matched[1].append(closest_p0)
-            matched[2].append(closest_p1)
-        else:
-            logger.debug("Binocular match rejected due to time dispersion criterion")
+            dispersion = max(
+                closest_p0["timestamp"], closest_p1["timestamp"], r["timestamp"]
+            ) - min(closest_p0["timestamp"], closest_p1["timestamp"], r["timestamp"])
+            if dispersion < dispersion_threshold:
+                current_matched[0].append(r)
+                current_matched[1].append(closest_p0)
+                current_matched[2].append(closest_p1)
+
+        if len(current_matched[0]) >= max(3, int(len(ref_pts) * 0.4)):
+            matched = current_matched
+            break
+        elif len(current_matched[0]) > len(matched[0]):
+            matched = current_matched
+
     return matched
 
 
@@ -104,19 +111,26 @@ def closest_matches_binocular(ref_pts, pupil0, pupil1, max_dispersion=1 / 15.0):
     pupil1_ts = np.array([p["timestamp"] for p in pupil1])
 
     matched = []
-    for r in ref_pts:
-        closest_p0_idx = _find_nearest_idx(pupil0_ts, r["timestamp"])
-        closest_p0 = pupil0[closest_p0_idx]
-        closest_p1_idx = _find_nearest_idx(pupil1_ts, r["timestamp"])
-        closest_p1 = pupil1[closest_p1_idx]
+    for dispersion_threshold in (max_dispersion, 0.2, 0.5, 1.0, 2.0):
+        current_matched = []
+        for r in ref_pts:
+            closest_p0_idx = _find_nearest_idx(pupil0_ts, r["timestamp"])
+            closest_p0 = pupil0[closest_p0_idx]
+            closest_p1_idx = _find_nearest_idx(pupil1_ts, r["timestamp"])
+            closest_p1 = pupil1[closest_p1_idx]
 
-        dispersion = max(
-            closest_p0["timestamp"], closest_p1["timestamp"], r["timestamp"]
-        ) - min(closest_p0["timestamp"], closest_p1["timestamp"], r["timestamp"])
-        if dispersion < max_dispersion:
-            matched.append({"ref": r, "pupil": closest_p0, "pupil1": closest_p1})
-        else:
-            logger.debug("Binocular match rejected due to time dispersion criterion")
+            dispersion = max(
+                closest_p0["timestamp"], closest_p1["timestamp"], r["timestamp"]
+            ) - min(closest_p0["timestamp"], closest_p1["timestamp"], r["timestamp"])
+            if dispersion < dispersion_threshold:
+                current_matched.append({"ref": r, "pupil": closest_p0, "pupil1": closest_p1})
+
+        if len(current_matched) >= max(3, int(len(ref_pts) * 0.4)):
+            matched = current_matched
+            break
+        elif len(current_matched) > len(matched):
+            matched = current_matched
+
     return matched
 
 
@@ -131,14 +145,23 @@ def closest_matches_monocular(ref_pts, pupil, max_dispersion=1 / 15.0):
     pupil_ts = np.array([p["timestamp"] for p in pupil])
 
     matched = []
-    for r in ref_pts:
-        closest_p_idx = _find_nearest_idx(pupil_ts, r["timestamp"])
-        closest_p = pupil[closest_p_idx]
-        dispersion = max(closest_p["timestamp"], r["timestamp"]) - min(
-            closest_p["timestamp"], r["timestamp"]
-        )
-        if dispersion < max_dispersion:
-            matched.append({"ref": r, "pupil": closest_p})
+    for dispersion_threshold in (max_dispersion, 0.2, 0.5, 1.0, 2.0):
+        current_matched = []
+        for r in ref_pts:
+            closest_p_idx = _find_nearest_idx(pupil_ts, r["timestamp"])
+            closest_p = pupil[closest_p_idx]
+            dispersion = max(closest_p["timestamp"], r["timestamp"]) - min(
+                closest_p["timestamp"], r["timestamp"]
+            )
+            if dispersion < dispersion_threshold:
+                current_matched.append({"ref": r, "pupil": closest_p})
+
+        if len(current_matched) >= max(3, int(len(ref_pts) * 0.4)):
+            matched = current_matched
+            break
+        elif len(current_matched) > len(matched):
+            matched = current_matched
+
     return matched
 
 
@@ -153,15 +176,24 @@ def closest_matches_monocular_batch(ref_pts, pupil, max_dispersion=1 / 15.0):
 
     pupil_ts = np.array([p["timestamp"] for p in pupil])
 
-    for r in ref_pts:
-        closest_p_idx = _find_nearest_idx(pupil_ts, r["timestamp"])
-        closest_p = pupil[closest_p_idx]
-        dispersion = max(closest_p["timestamp"], r["timestamp"]) - min(
-            closest_p["timestamp"], r["timestamp"]
-        )
-        if dispersion < max_dispersion:
-            matched[0].append(r)
-            matched[1].append(closest_p)
+    for dispersion_threshold in (max_dispersion, 0.2, 0.5, 1.0, 2.0):
+        current_matched = [[], []]
+        for r in ref_pts:
+            closest_p_idx = _find_nearest_idx(pupil_ts, r["timestamp"])
+            closest_p = pupil[closest_p_idx]
+            dispersion = max(closest_p["timestamp"], r["timestamp"]) - min(
+                closest_p["timestamp"], r["timestamp"]
+            )
+            if dispersion < dispersion_threshold:
+                current_matched[0].append(r)
+                current_matched[1].append(closest_p)
+
+        if len(current_matched[0]) >= max(3, int(len(ref_pts) * 0.4)):
+            matched = current_matched
+            break
+        elif len(current_matched[0]) > len(matched[0]):
+            matched = current_matched
+
     return matched
 
 
