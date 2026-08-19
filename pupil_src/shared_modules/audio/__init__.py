@@ -89,21 +89,18 @@ def _platform_specific_switch(linux_fn, darwin_fn, windows_fn, unknown_fn, **kwa
 
 
 def _linux_beep():
-    sound_path = "/usr/share/sounds/ubuntu/stereo/message.ogg"
-    if os.path.exists(sound_path):
-        try:
-            sp.Popen(["paplay", sound_path], stdout=sp.DEVNULL, stderr=sp.DEVNULL)
-        except OSError:
-            pass
+    try:
+        sp.Popen(["paplay", "/usr/share/sounds/ubuntu/stereo/message.ogg"])
+    except OSError:
+        logger.warning("Soundfile not found.")
+        print("\a")
 
 
 def _linux_tink():
-    sound_path = "/usr/share/sounds/ubuntu/stereo/button-pressed.ogg"
-    if os.path.exists(sound_path):
-        try:
-            sp.Popen(["paplay", sound_path], stdout=sp.DEVNULL, stderr=sp.DEVNULL)
-        except OSError:
-            pass
+    try:
+        sp.Popen(["paplay", "/usr/share/sounds/ubuntu/stereo/button-pressed.ogg"])
+    except OSError:
+        print("\a")
 
 
 def _darwin_beep():

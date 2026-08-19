@@ -285,9 +285,11 @@ class CalibrationChoreographyPlugin(Plugin):
         return ui_button.status_text or ""
 
     @status_text.setter
-    def status_text(self, value: str):
+    def status_text(self, value: T.Any):
+        value = str(value).strip() if value else ""
         ui_button = self.__mode_button(self.current_mode)
-        ui_button.status_text = value
+        if ui_button:
+            ui_button.status_text = value
 
     # -- Plugin Functions
 
