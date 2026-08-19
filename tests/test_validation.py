@@ -59,7 +59,7 @@ def test_validation_workflow():
             "id": 0,
             "timestamp": ts,
             "confidence": 0.9,
-            "method": "Mamba3 (T=5)",
+            "method": "Mamba3 (T=7)",
             "norm_pos": pos,
             "ellipse": {"center": (pos[0]*640, pos[1]*480), "axes": (20, 20), "angle": 0}
         })
@@ -83,7 +83,7 @@ def test_validation_workflow():
             "id": 0,
             "timestamp": ts,
             "confidence": 0.9,
-            "method": "Mamba3 (T=5)",
+            "method": "Mamba3 (T=7)",
             "norm_pos": (0.5 + i * 0.001, 0.5 + i * 0.001),
             "ellipse": {"center": (320 + i, 240 + i), "axes": (20, 20), "angle": 0}
         })
@@ -93,7 +93,7 @@ def test_validation_workflow():
             "screen_pos": (320, 240)
         })
         
-    # 3. Accuracy_Visualizer receives validation.data notification (Route B)
+    # 3. Accuracy_Visualizer receives validation.data notification (Route B - Calibration ON)
     acc_vis = Accuracy_Visualizer(g_pool)
     
     val_notification = ChoreographyNotification(
@@ -107,13 +107,23 @@ def test_validation_workflow():
         record=True,
     ).to_dict()
     
-    # Dispatch notification to Accuracy_Visualizer
     acc_vis.on_notify(val_notification)
     
     print(f"Is validation input complete: {acc_vis.recent_input.is_complete}")
     assert acc_vis.accuracy is not None, "Accuracy visualizer failed to compute accuracy for validation data!"
-    print(f"✅ Computed Validation Angular Accuracy: {acc_vis.accuracy.result:.3f} degrees (used: {acc_vis.accuracy.num_used}/{acc_vis.accuracy.num_total})")
-    print(f"✅ Computed Validation Angular Precision: {acc_vis.precision.result:.3f} degrees (used: {acc_vis.precision.num_used}/{acc_vis.precision.num_total})")
+    print(f"✅ [Calibration ON] Validation Angular Accuracy: {acc_vis.accuracy.result:.3f} degrees (used: {acc_vis.accuracy.num_used}/{acc_vis.accuracy.num_total})")
+    print(f"✅ [Calibration ON] Validation Angular Precision: {acc_vis.precision.result:.3f} degrees (used: {acc_vis.precision.num_used}/{acc_vis.precision.num_total})")
+
+    # 4. Test Calibration OFF mode (Bypass)
+    print("\n--- Testing Calibration OFF (Bypass) Mode ---")
+    gazer.enable_calibration = False
+    g_pool.enable_calibration = False
+    gaze_mapped = list(gazer.map_pupil_to_gaze(pupil_val))
+    assert len(gaze_mapped) > 0, "Gazer2D failed to output gaze in bypass mode!"
+    print(f"✅ [Calibration OFF] Raw Bypass Gaze Sample: norm_pos={gaze_mapped[0]['norm_pos']}")
+    assert gaze_mapped[0]["norm_pos"] == pupil_val[0]["norm_pos"], "Bypass mode did not preserve raw pupil norm_pos!"
+    print("✅ Verified that Calibration OFF accurately passes raw pupil norm_pos without regression.")
+    
     print("=== All Validation Tests Passed Successfully! ===")
 
 if __name__ == "__main__":

@@ -189,6 +189,33 @@ class Gazer2D(GazerBase):
     def predict(
         self, matched_pupil_data: T.Iterator[T.List["Pupil"]]
     ) -> T.Iterator["Gaze"]:
+        enable_calib = getattr(self, "enable_calibration", getattr(self.g_pool, "enable_calibration", True))
+        if not enable_calib:
+            for pupil_match in matched_pupil_data:
+                if len(pupil_match) == 1:
+                    topic = f"gaze.2d.{pupil_match[0]['id']}."
+                    yield {
+                        "topic": topic,
+                        "norm_pos": pupil_match[0]["norm_pos"],
+                        "confidence": pupil_match[0]["confidence"],
+                        "timestamp": pupil_match[0]["timestamp"],
+                        "base_data": pupil_match,
+                    }
+                elif len(pupil_match) == 2:
+                    topic = "gaze.2d.01."
+                    avg_norm_pos = (
+                        (pupil_match[0]["norm_pos"][0] + pupil_match[1]["norm_pos"][0]) / 2.0,
+                        (pupil_match[0]["norm_pos"][1] + pupil_match[1]["norm_pos"][1]) / 2.0,
+                    )
+                    yield {
+                        "topic": topic,
+                        "norm_pos": avg_norm_pos,
+                        "confidence": float(np.mean([p["confidence"] for p in pupil_match])),
+                        "timestamp": float(np.mean([p["timestamp"] for p in pupil_match])),
+                        "base_data": pupil_match,
+                    }
+            return
+
         for pupil_match in matched_pupil_data:
             num_matched = len(pupil_match)
             gaze_positions = ...  # Placeholder for gaze_positions

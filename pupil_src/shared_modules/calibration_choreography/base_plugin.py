@@ -263,6 +263,21 @@ class CalibrationChoreographyPlugin(Plugin):
         self._update_gazer_description_ui_text()
 
     @property
+    def enable_calibration(self) -> bool:
+        gazer = getattr(self.g_pool, "active_gaze_mapping_plugin", None)
+        if gazer is not None:
+            return getattr(gazer, "enable_calibration", True)
+        return getattr(self.g_pool, "enable_calibration", True)
+
+    @enable_calibration.setter
+    def enable_calibration(self, value: bool):
+        if hasattr(self, "g_pool") and self.g_pool is not None:
+            self.g_pool.enable_calibration = bool(value)
+            gazer = getattr(self.g_pool, "active_gaze_mapping_plugin", None)
+            if gazer is not None:
+                gazer.enable_calibration = bool(value)
+
+    @property
     def status_text(self) -> str:
         ui_button = self.__mode_button(self.current_mode)
         return ui_button.status_text or ""
@@ -400,6 +415,7 @@ class CalibrationChoreographyPlugin(Plugin):
         else:
             self.menu.append(ui.Separator())
         self.menu.append(self.__ui_selector_gazer)
+        self.menu.append(ui.Switch("enable_calibration", self, label="Enable Calibration Mapping"))
         self.menu.append(self.__ui_gazer_description_text)
         self.menu.append(best_practices_text)
 

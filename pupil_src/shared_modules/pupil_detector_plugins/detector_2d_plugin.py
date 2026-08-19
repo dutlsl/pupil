@@ -112,7 +112,7 @@ class Detector2DPlugin(PupilDetectorPlugin):
         self.device = torch.device(device_str)
 
         # UI Control States
-        self.active_model = "Mamba3 (T=5)"
+        self.active_model = "Mamba3 (T=7)"
         self.flip_vertically = False
         self.flip_horizontally = False
 
@@ -125,22 +125,33 @@ class Detector2DPlugin(PupilDetectorPlugin):
         self._smooth_alpha = 0.4
         self._consecutive_jumps = 0
 
-        # Load Models (Mamba3 T=3,5,7,9,11 models, RITnet as fallback)
+        # Load Models (Mamba3 T=7, RITnet as fallback)
         self.vivim_models = {}
-        self._vivim_queues = {t: collections.deque(maxlen=t) for t in [3, 5, 7, 9, 11]}
+        self._vivim_queues = {7: collections.deque(maxlen=7)}
         self._init_nnunet_models()
         self._init_ritnet_model()
 
+    @property
+    def enable_calibration(self) -> bool:
+        gazer = getattr(self.g_pool, "active_gaze_mapping_plugin", None)
+        if gazer is not None:
+            return getattr(gazer, "enable_calibration", True)
+        return getattr(self.g_pool, "enable_calibration", True)
+
+    @enable_calibration.setter
+    def enable_calibration(self, value: bool):
+        if hasattr(self, "g_pool") and self.g_pool is not None:
+            self.g_pool.enable_calibration = bool(value)
+            gazer = getattr(self.g_pool, "active_gaze_mapping_plugin", None)
+            if gazer is not None:
+                gazer.enable_calibration = bool(value)
+
     def _init_nnunet_models(self):
         try:
-            logger.info("Initializing Vivim Mamba3 models (T=3, 5, 7, 9, 11)...")
+            logger.info("Initializing Vivim Mamba3 T=7 model...")
 
             self.vivim_ckpts = {
-                3: os.path.join(NNUNET_DIR, "nnUNet_results", "Dataset600_OpenEDS2019", "nnUNetTrainer_Vivim__nnUNetPlans__2d", "fold_1", "checkpoint_best.pth"),
-                5: os.path.join(NNUNET_DIR, "nnUNet_results", "Dataset600_OpenEDS2019", "nnUNetTrainer_Vivim_T5__nnUNetPlans__2d", "fold_1", "checkpoint_best.pth"),
                 7: os.path.join(NNUNET_DIR, "nnUNet_results", "Dataset600_OpenEDS2019", "nnUNetTrainer_Vivim__nnUNetPlans__2d", "fold_1_T7", "checkpoint_best.pth"),
-                9: os.path.join(NNUNET_DIR, "nnUNet_results", "Dataset600_OpenEDS2019", "nnUNetTrainer_Vivim__nnUNetPlans__2d", "fold_1_T9", "checkpoint_best.pth"),
-                11: os.path.join(NNUNET_DIR, "nnUNet_results", "Dataset600_OpenEDS2019", "nnUNetTrainer_Vivim__nnUNetPlans__2d", "fold_1_T11", "checkpoint_best.pth"),
             }
 
             from models.vivim_backbone import VivimBackbone
@@ -578,9 +589,10 @@ class Detector2DPlugin(PupilDetectorPlugin):
                 "active_model",
                 self,
                 label="Active Model",
-                selection=["RITnet", "2D C++", "Mamba3 (T=3)", "Mamba3 (T=5)", "Mamba3 (T=7)", "Mamba3 (T=9)", "Mamba3 (T=11)"],
+                selection=["Mamba3 (T=7)", "2D C++", "RITnet"],
             )
         )
+        self.menu.append(ui.Switch("enable_calibration", self, label="Enable Calibration Mapping"))
         self.menu.append(ui.Switch("flip_vertically", self, label="Flip Vertically (Eye 0)"))
         self.menu.append(ui.Switch("flip_horizontally", self, label="Flip Horizontally (Eye 0)"))
         self.menu.append(

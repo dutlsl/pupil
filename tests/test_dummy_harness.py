@@ -58,11 +58,10 @@ def run_harness():
     print("   ✓ Verified model 'RITnet' is loaded and ready.")
 
     assert hasattr(plugin, "vivim_models") and plugin.vivim_models is not None, "❌ vivim_models dict not found!"
-    for t in [3, 5, 7, 9, 11]:
-        assert t in plugin.vivim_models, f"❌ Mamba3 T={t} failed to load / is None!"
-        print(f"   ✓ Verified model 'Mamba3 (T={t})' is loaded and ready.")
+    assert 7 in plugin.vivim_models, "❌ Mamba3 T=7 failed to load / is None!"
+    print("   ✓ Verified model 'Mamba3 (T=7)' is loaded and ready.")
 
-    print("✅ Plugin & All Models Loaded Successfully.")
+    print("✅ Plugin & Models (Mamba3 T=7, 2D C++, RITnet) Loaded Successfully.")
 
     resolutions = [
         ("Pupil Core Eye Camera (192x192)", 192, 192),
@@ -70,7 +69,7 @@ def run_harness():
         ("OpenEDS Dataset Native (400x640)", 400, 640),
     ]
 
-    models = ["RITnet", "2D C++", "Mamba3 (T=3)", "Mamba3 (T=5)", "Mamba3 (T=7)", "Mamba3 (T=9)", "Mamba3 (T=11)"]
+    models = ["Mamba3 (T=7)", "2D C++", "RITnet"]
 
     print("\n[2/3] Executing Dummy USB Video Stream & Streaming Inference Tests...")
     for res_name, h, w in resolutions:
