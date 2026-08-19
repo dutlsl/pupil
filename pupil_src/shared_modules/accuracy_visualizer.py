@@ -322,6 +322,15 @@ class Accuracy_Visualizer(Plugin):
             if self.recent_input.is_complete:
                 self.recalculate()
 
+        if notification["subject"] == "calibration.set_enabled":
+            enabled = bool(notification.get("enabled", True))
+            if hasattr(self, "g_pool") and self.g_pool is not None:
+                self.g_pool.enable_calibration = enabled
+            if self.recent_input.is_complete:
+                if self.recent_input.gazer_params is not None:
+                    self.recent_input.gazer_params["enable_calibration"] = enabled
+                self.recalculate()
+
     def __handle_calibration_setup_notification(self, note_dict: dict) -> bool:
         try:
             note = CalibrationSetupNotification.from_dict(note_dict)
@@ -433,6 +442,10 @@ class Accuracy_Visualizer(Plugin):
         succession_threshold=np.cos(np.deg2rad(0.5)),
     ) -> AccuracyPrecisionResult:
         gazer = gazer_class(g_pool, params=gazer_params)
+        if isinstance(gazer_params, dict) and "enable_calibration" in gazer_params:
+            gazer.enable_calibration = bool(gazer_params["enable_calibration"])
+        elif hasattr(g_pool, "enable_calibration"):
+            gazer.enable_calibration = bool(g_pool.enable_calibration)
 
         gaze_pos = gazer.map_pupil_to_gaze(pupil_list)
         ref_pos = ref_list

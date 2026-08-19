@@ -140,11 +140,13 @@ class Detector2DPlugin(PupilDetectorPlugin):
 
     @enable_calibration.setter
     def enable_calibration(self, value: bool):
+        val = bool(value)
         if hasattr(self, "g_pool") and self.g_pool is not None:
-            self.g_pool.enable_calibration = bool(value)
+            self.g_pool.enable_calibration = val
             gazer = getattr(self.g_pool, "active_gaze_mapping_plugin", None)
             if gazer is not None:
-                gazer.enable_calibration = bool(value)
+                gazer.enable_calibration = val
+        self.notify_all({"subject": "calibration.set_enabled", "enabled": val})
 
     def _init_nnunet_models(self):
         try:
@@ -742,6 +744,14 @@ class Detector2DPlugin(PupilDetectorPlugin):
                 
                 threading.Thread(target=log_extraction_worker, daemon=True).start()
         
+        if subj == "calibration.set_enabled":
+            val = bool(notification.get("enabled", True))
+            if hasattr(self, "g_pool") and self.g_pool is not None:
+                self.g_pool.enable_calibration = val
+                gazer = getattr(self.g_pool, "active_gaze_mapping_plugin", None)
+                if gazer is not None:
+                    gazer.enable_calibration = val
+
         if "calibration" in subj and (subj.endswith(".should_start") or subj.endswith(".started")):
             if hasattr(self, "temporal_model") and self.temporal_model is not None:
                 if hasattr(self.temporal_model, "reset_temporal_state"):

@@ -234,11 +234,16 @@ class GazerBase(abc.ABC, Plugin):
     # -- Core Functionality
 
     def get_params(self):
-        return {
+        params = {
             "left_model": dict(self.left_model.get_params()),
             "right_model": dict(self.right_model.get_params()),
             "binocular_model": dict(self.binocular_model.get_params()),
         }
+        if hasattr(self, "enable_calibration"):
+            params["enable_calibration"] = bool(self.enable_calibration)
+        elif hasattr(self.g_pool, "enable_calibration"):
+            params["enable_calibration"] = bool(self.g_pool.enable_calibration)
+        return params
 
     def set_params(self, params):
         left_params = params.get("left_model", {})
@@ -250,6 +255,8 @@ class GazerBase(abc.ABC, Plugin):
             self.right_model.set_params(**right_params)
         if binocular_params:
             self.binocular_model.set_params(**binocular_params)
+        if "enable_calibration" in params:
+            self.enable_calibration = bool(params["enable_calibration"])
 
     def init_models(self):
         self.left_model: Model = self._init_left_model()

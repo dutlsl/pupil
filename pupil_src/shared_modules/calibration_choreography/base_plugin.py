@@ -271,11 +271,13 @@ class CalibrationChoreographyPlugin(Plugin):
 
     @enable_calibration.setter
     def enable_calibration(self, value: bool):
+        val = bool(value)
         if hasattr(self, "g_pool") and self.g_pool is not None:
-            self.g_pool.enable_calibration = bool(value)
+            self.g_pool.enable_calibration = val
             gazer = getattr(self.g_pool, "active_gaze_mapping_plugin", None)
             if gazer is not None:
-                gazer.enable_calibration = bool(value)
+                gazer.enable_calibration = val
+        self.notify_all({"subject": "calibration.set_enabled", "enabled": val})
 
     @property
     def status_text(self) -> str:
@@ -283,11 +285,20 @@ class CalibrationChoreographyPlugin(Plugin):
         return ui_button.status_text or ""
 
     @status_text.setter
-    def status_text(self, value: T.Any):
-        value = str(value).strip() if value else ""
+    def status_text(self, value: str):
         ui_button = self.__mode_button(self.current_mode)
-        if ui_button:
-            ui_button.status_text = value
+        ui_button.status_text = value
+
+    # -- Plugin Functions
+
+    def on_notify(self, notification):
+        if notification.get("subject") == "calibration.set_enabled":
+            val = bool(notification.get("enabled", True))
+            if hasattr(self, "g_pool") and self.g_pool is not None:
+                self.g_pool.enable_calibration = val
+                gazer = getattr(self.g_pool, "active_gaze_mapping_plugin", None)
+                if gazer is not None:
+                    gazer.enable_calibration = val
 
     @property
     def pupil_list(self) -> T.List[dict]:
@@ -329,7 +340,8 @@ class CalibrationChoreographyPlugin(Plugin):
         elif mode == ChoreographyMode.VALIDATION:
             assert self.g_pool.active_gaze_mapping_plugin is not None
             gazer_class = self.g_pool.active_gaze_mapping_plugin.__class__
-            gazer_params = self.g_pool.active_gaze_mapping_plugin.get_params()
+            gazer_params = dict(self.g_pool.active_gaze_mapping_plugin.get_params())
+            gazer_params["enable_calibration"] = self.enable_calibration
 
             self._start_plugin("Accuracy_Visualizer")
             self.notify_all(
