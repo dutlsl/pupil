@@ -1,5 +1,4 @@
 # Pupil Labs 딥러닝 동공 디텍터 실험 과정 에러 분석 보고서 (Experiment & Error Report)
-
 본 문서는 **`TemporalUNet` (Temporal ConvLSTM 2D nnUNet) 실시간 동공 디텍터 및 gaze mapping 실험 과정에서 발생한 모든 에러 로그 원문, 원인 분석 및 해결 조치 내역**을 정리한 통합 기술 보고서입니다.
 
 ---

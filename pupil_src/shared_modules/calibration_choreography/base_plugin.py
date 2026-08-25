@@ -337,13 +337,51 @@ class CalibrationChoreographyPlugin(Plugin):
         self, mode: ChoreographyMode, pupil_list: list, ref_list: list
     ):
         if mode == ChoreographyMode.CALIBRATION:
-            calib_data = {"ref_list": ref_list, "pupil_list": pupil_list}
+            curr_calib = getattr(self.g_pool, "calibration_counter", 0) + 1
+            self.g_pool.calibration_counter = curr_calib
+            self.g_pool.validation_counter_under_current_calib = 0
+            self.g_pool.is_calibrated = True
+
+            calib_pattern = getattr(self, "calibration_pattern", "12-Point (4x3 Dense Grid / New)")
+            calib_pts = len(self.get_list_of_markers_to_show(ChoreographyMode.CALIBRATION)) if hasattr(self, "get_list_of_markers_to_show") else 12
+            self.g_pool.last_calib_pattern = calib_pattern
+            self.g_pool.last_calib_points = calib_pts
+
+            calib_data = {
+                "ref_list": ref_list,
+                "pupil_list": pupil_list,
+                "calibration_id": curr_calib,
+                "calibration_pattern": calib_pattern,
+                "calibration_points_count": calib_pts,
+                "sample_duration": getattr(self, "sample_duration", 60),
+            }
             self._start_plugin(self.selected_gazer_class, calib_data=calib_data)
         elif mode == ChoreographyMode.VALIDATION:
             assert self.g_pool.active_gaze_mapping_plugin is not None
             gazer_class = self.g_pool.active_gaze_mapping_plugin.__class__
             gazer_params = dict(self.g_pool.active_gaze_mapping_plugin.get_params())
             gazer_params["enable_calibration"] = self.enable_calibration
+
+            curr_calib = getattr(self.g_pool, "calibration_counter", 1 if self.enable_calibration else 0)
+            val_round = getattr(self.g_pool, "validation_counter_under_current_calib", 0) + 1
+            total_val = getattr(self.g_pool, "total_validation_counter", 0) + 1
+            self.g_pool.validation_counter_under_current_calib = val_round
+            self.g_pool.total_validation_counter = total_val
+
+            calib_pattern = getattr(self.g_pool, "last_calib_pattern", getattr(self, "calibration_pattern", "12-Point (4x3 Dense Grid / New)"))
+            calib_pts = getattr(self.g_pool, "last_calib_points", 12)
+
+            val_pattern = getattr(self, "validation_pattern", "Diamond (Inward Cross / Default)")
+            val_pts = len(self.get_list_of_markers_to_show(ChoreographyMode.VALIDATION)) if hasattr(self, "get_list_of_markers_to_show") else 4
+
+            gazer_params["calibration_id"] = curr_calib
+            gazer_params["validation_round"] = val_round
+            gazer_params["total_validation_count"] = total_val
+            gazer_params["calibration_pattern"] = calib_pattern
+            gazer_params["calibration_points_count"] = calib_pts
+            gazer_params["validation_pattern"] = val_pattern
+            gazer_params["validation_points_count"] = val_pts
+            gazer_params["sample_duration"] = getattr(self, "sample_duration", 60)
 
             self._start_plugin("Accuracy_Visualizer")
             self.notify_all(

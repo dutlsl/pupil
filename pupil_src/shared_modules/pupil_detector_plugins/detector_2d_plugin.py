@@ -41,6 +41,7 @@ from plugin import Plugin
 
 from . import color_scheme
 from .detector_base_plugin import PupilDetectorPlugin
+from .eyelid_filter import fit_eyelid_robust_ellipse
 from .visualizer_2d import draw_pupil_outline
 try:
     from pupil_detector_plugins import deepvog
@@ -104,6 +105,11 @@ class Detector2DPlugin(PupilDetectorPlugin):
         g_pool=None,
         properties=None,
         detector_2d: Detector2D = None,
+        active_model="Mamba3 (T=7)",
+        flip_vertically: bool = False,
+        flip_horizontally: bool = False,
+        enable_calibration: bool = True,
+        **kwargs,
     ):
         super().__init__(g_pool=g_pool)
         self.detector_2d = detector_2d or Detector2D(properties or {})
@@ -112,9 +118,10 @@ class Detector2DPlugin(PupilDetectorPlugin):
         self.device = torch.device(device_str)
 
         # UI Control States
-        self.active_model = "Mamba3 (T=7)"
-        self.flip_vertically = False
-        self.flip_horizontally = False
+        self.active_model = active_model
+        self.flip_vertically = flip_vertically
+        self.flip_horizontally = flip_horizontally
+        self._enable_calibration = enable_calibration
 
         # Preprocessing & Optimizations
         self._clahe = cv2.createCLAHE(clipLimit=CLIP_LIMIT, tileGridSize=(TILE_GRID_SIZE, TILE_GRID_SIZE))
@@ -151,40 +158,54 @@ class Detector2DPlugin(PupilDetectorPlugin):
     def _init_nnunet_models(self):
         try:
             logger.info("Initializing Vivim Mamba3 T=7 model...")
+            current_dir = os.path.dirname(os.path.abspath(__file__))
+            pupil_src_dir = os.path.abspath(os.path.join(current_dir, "..", ".."))
 
-            self.vivim_ckpts = {
-                7: os.path.join(NNUNET_DIR, "nnUNet_results", "Dataset600_OpenEDS2019", "nnUNetTrainer_Vivim__nnUNetPlans__2d", "fold_1_T7", "checkpoint_best.pth"),
-            }
+            candidate_ckpts = [
+                os.path.join(current_dir, "best_checkpoint_t7.pth"),
+                os.path.join(pupil_src_dir, "best_checkpoint_t7.pth"),
+                os.path.join(current_dir, "best_checkpoint.pth"),
+                os.path.join(pupil_src_dir, "best_checkpoint.pth"),
+            ]
 
-            from models.vivim_backbone import VivimBackbone
-            self.vivim_models = {}
-            for t, ckpt_path in self.vivim_ckpts.items():
-                if os.path.exists(ckpt_path):
-                    model = VivimBackbone(
-                        in_channels=1,
-                        num_classes=4,
-                        base_channels=32,
-                        d_state=16,
-                        d_conv=4,
-                        expand=2,
-                        use_mamba=True,
-                    ).to(self.device)
-                    ckpt = torch.load(ckpt_path, map_location=self.device, weights_only=False)
-                    state_dict = ckpt.get("network_weights", ckpt.get("model_state_dict", ckpt))
-                    new_state_dict = {}
-                    for k, v in state_dict.items():
-                        if k.startswith("backbone."):
-                            new_state_dict[k[len("backbone."):]] = v
-                        else:
-                            new_state_dict[k] = v
-                    model.load_state_dict(new_state_dict, strict=False)
-                    model.eval()
-                    self.vivim_models[t] = model
-                    logger.info(f"✅ nnUNet Vivim Mamba3 T={t} model initialized successfully.")
-                else:
-                    logger.warning(f"Vivim T={t} checkpoint not found at {ckpt_path}")
+            ckpt_path = None
+            for p in candidate_ckpts:
+                if os.path.exists(p):
+                    ckpt_path = p
+                    break
+
+            if ckpt_path is not None:
+                try:
+                    from .vivim import VivimBackbone
+                except Exception:
+                    from vivim import VivimBackbone
+
+                model = VivimBackbone(
+                    in_channels=1,
+                    num_classes=4,
+                    base_channels=32,
+                    d_state=16,
+                    d_conv=4,
+                    expand=2,
+                    use_mamba=True,
+                ).to(self.device)
+
+                ckpt = torch.load(ckpt_path, map_location=self.device, weights_only=False)
+                state_dict = ckpt.get("network_weights", ckpt.get("model_state_dict", ckpt))
+                new_state_dict = {}
+                for k, v in state_dict.items():
+                    if k.startswith("backbone."):
+                        new_state_dict[k[len("backbone."):]] = v
+                    else:
+                        new_state_dict[k] = v
+                model.load_state_dict(new_state_dict, strict=False)
+                model.eval()
+                self.vivim_models[7] = model
+                logger.info(f"✅ Vivim Mamba3 T=7 model initialized successfully from {ckpt_path}")
+            else:
+                logger.warning("Vivim Mamba3 T=7 checkpoint not found.")
         except Exception as e:
-            logger.error(f"Failed to initialize nnUNet models: {e}")
+            logger.error(f"Failed to initialize Vivim Mamba3 model: {e}")
 
     def _init_ritnet_model(self):
         try:
@@ -296,7 +317,7 @@ class Detector2DPlugin(PupilDetectorPlugin):
     def _preprocess_nnunet_frame(self, frame):
         gray = frame.gray
         if gray is None:
-            return None, 0, 0, False, False, False
+            return None, 0, 0, False, False
 
         gray = gray.astype(np.uint8)
         orig_h, orig_w = gray.shape[:2]
@@ -309,28 +330,16 @@ class Detector2DPlugin(PupilDetectorPlugin):
         if flip_h:
             gray = cv2.flip(gray, 1)
 
-        # Dynamic Z-Score normalization (adapts to camera IR domain shifts)
         gray_float = gray.astype(np.float32)
         mean_val = float(gray_float.mean())
         std_val = float(gray_float.std()) + 1e-8
         img_norm = (gray_float - mean_val) / std_val
 
-        # Letterboxing: Aspect Ratio Preserving Padding to 640x400
-        # Prevents Pupil Core (192x192) horizontal stretching distortion
-        if (orig_h, orig_w) == (400, 640):
-            t_tensor = torch.from_numpy(img_norm).unsqueeze(0).unsqueeze(0).to(self.device)
-            is_letterboxed = False
-        else:
-            img_400 = cv2.resize(img_norm, (400, 400), interpolation=cv2.INTER_LINEAR)
-            canvas = np.zeros((400, 640), dtype=np.float32)
-            canvas[:, 120:520] = img_400
-            t_tensor = torch.from_numpy(canvas).unsqueeze(0).unsqueeze(0).to(self.device)
-            is_letterboxed = True
-
-        return t_tensor, orig_h, orig_w, flip_v, flip_h, is_letterboxed
+        t_tensor = torch.from_numpy(img_norm).unsqueeze(0).unsqueeze(0).to(self.device)
+        return t_tensor, orig_h, orig_w, flip_v, flip_h
 
     def _detect_temporal_unet(self, frame, **kwargs):
-        t_tensor, orig_h, orig_w, flip_v, flip_h, is_letterboxed = self._preprocess_nnunet_frame(frame)
+        t_tensor, orig_h, orig_w, flip_v, flip_h = self._preprocess_nnunet_frame(frame)
         if t_tensor is None:
             return self._empty_datum(frame)
 
@@ -344,13 +353,14 @@ class Detector2DPlugin(PupilDetectorPlugin):
             if isinstance(logits, (list, tuple)):
                 logits = logits[0]
             
-            # Squeeze to (400, 640) for postprocessing
             pred_mask = logits.argmax(dim=1).squeeze(0).cpu().numpy().astype(np.uint8)
+            if pred_mask.shape[:2] != (orig_h, orig_w):
+                pred_mask = cv2.resize(pred_mask, (orig_w, orig_h), interpolation=cv2.INTER_NEAREST)
 
-        return self._postprocess_mask_to_datum(pred_mask, frame, orig_h, orig_w, flip_v, flip_h, is_letterboxed)
+        return self._postprocess_mask_to_datum(pred_mask, frame, orig_h, orig_w, flip_v, flip_h)
 
     def _detect_nnunet_2d(self, frame, **kwargs):
-        t_tensor, orig_h, orig_w, flip_v, flip_h, is_letterboxed = self._preprocess_nnunet_frame(frame)
+        t_tensor, orig_h, orig_w, flip_v, flip_h = self._preprocess_nnunet_frame(frame)
         if t_tensor is None:
             return self._empty_datum(frame)
 
@@ -365,8 +375,10 @@ class Detector2DPlugin(PupilDetectorPlugin):
                 logits = logits[0]
 
             pred_mask = logits.argmax(dim=1).squeeze(0).cpu().numpy().astype(np.uint8)
+            if pred_mask.shape[:2] != (orig_h, orig_w):
+                pred_mask = cv2.resize(pred_mask, (orig_w, orig_h), interpolation=cv2.INTER_NEAREST)
 
-        return self._postprocess_mask_to_datum(pred_mask, frame, orig_h, orig_w, flip_v, flip_h, is_letterboxed)
+        return self._postprocess_mask_to_datum(pred_mask, frame, orig_h, orig_w, flip_v, flip_h)
 
     def _detect_vivim_mamba_by_t(self, frame, model, t_val, **kwargs):
         gray = frame.gray
@@ -384,20 +396,14 @@ class Detector2DPlugin(PupilDetectorPlugin):
         if flip_h:
             gray = cv2.flip(gray, 1)
 
-        gray_float = gray.astype(np.float32)
-        mean_val = float(gray_float.mean())
-        std_val = float(gray_float.std()) + 1e-8
-        img_norm = (gray_float - mean_val) / std_val
-
-        if (orig_h, orig_w) == (400, 640):
-            img_400 = img_norm[:, 120:520]
-            is_openeds_400 = True
-        else:
-            img_400 = cv2.resize(img_norm, (400, 400), interpolation=cv2.INTER_LINEAR)
-            is_openeds_400 = False
+        # Dynamic Z-Score normalization (matches OpenEDS Dataset600 training)
+        img_float = cv2.resize(gray, (400, 400)).astype(np.float32)
+        mean_val = float(img_float.mean())
+        std_val = float(img_float.std()) + 1e-8
+        img_norm = (img_float - mean_val) / std_val
 
         canvas = np.zeros((448, 448), dtype=np.float32)
-        canvas[24:424, 24:424] = img_400
+        canvas[24:424, 24:424] = img_norm
         t_tensor = torch.from_numpy(canvas).unsqueeze(0).to(self.device)  # [1, 448, 448]
 
         queue = self._vivim_queues[t_val]
@@ -416,30 +422,19 @@ class Detector2DPlugin(PupilDetectorPlugin):
 
             pred_mask_448 = logits.argmax(dim=1).squeeze(0).cpu().numpy().astype(np.uint8)
 
-        # Unpad 24px -> 400x400
         pred_mask_400 = pred_mask_448[24:424, 24:424]
-
-        full_canvas = np.zeros((400, 640), dtype=np.uint8)
-        full_canvas[:, 120:520] = pred_mask_400
+        pred_mask = cv2.resize(pred_mask_400, (orig_w, orig_h), interpolation=cv2.INTER_NEAREST)
 
         return self._postprocess_mask_to_datum(
-            full_canvas,
+            pred_mask,
             frame,
             orig_h,
             orig_w,
             flip_v,
             flip_h,
-            is_letterboxed=not is_openeds_400
         )
 
-    def _postprocess_mask_to_datum(self, raw_pred_mask, frame, orig_h, orig_w, flip_v, flip_h, is_letterboxed=False):
-        if is_letterboxed:
-            # Crop 120px left/right padding -> 400x400 -> resize back to orig_w x orig_h (192x192)
-            mask_400 = raw_pred_mask[:, 120:520]
-            pred_mask = cv2.resize(mask_400, (orig_w, orig_h), interpolation=cv2.INTER_NEAREST)
-        else:
-            pred_mask = raw_pred_mask[:orig_h, :orig_w]
-
+    def _postprocess_mask_to_datum(self, pred_mask, frame, orig_h, orig_w, flip_v, flip_h):
         pupil_mask = np.zeros_like(pred_mask, dtype=np.uint8)
         pupil_mask[pred_mask == PUPIL_CLASS_ID] = 255
 
@@ -458,57 +453,76 @@ class Detector2DPlugin(PupilDetectorPlugin):
             return self._empty_datum(frame)
 
         ellipse = cv2.fitEllipse(best_contour)
-        (cx, cy), (MA, ma), angle_deg = ellipse
+        (cx, cy), (d1, d2), angle_deg = ellipse
+
+        # Guarantee axes[0] is minor_diameter and axes[1] is major_diameter (axes[0] <= axes[1])
+        if d1 > d2:
+            minor_d = float(d2)
+            major_d = float(d1)
+            angle_deg = (angle_deg + 90.0) % 180.0
+        else:
+            minor_d = float(d1)
+            major_d = float(d2)
+            angle_deg = angle_deg % 180.0
 
         if flip_v:
-            cy = orig_h - 1 - cy
-            angle_deg = 180.0 - angle_deg
+            cy = float(orig_h - 1.0 - cy)
+            angle_deg = (180.0 - angle_deg) % 180.0
         if flip_h:
-            cx = orig_w - 1 - cx
-            angle_deg = 180.0 - angle_deg
+            cx = float(orig_w - 1.0 - cx)
+            angle_deg = (180.0 - angle_deg) % 180.0
 
         area = cv2.contourArea(best_contour)
-        ellipse_area = np.pi * (MA / 2.0) * (ma / 2.0)
-        area_ratio = min(area, ellipse_area) / (max(area, ellipse_area) + 1e-6)
-        aspect_ratio = min(MA, ma) / (max(MA, ma) + 1e-6)
+        ellipse_area = np.pi * (minor_d / 2.0) * (major_d / 2.0)
+        area_diff_ratio = min(area, ellipse_area) / (max(area, ellipse_area) + 1e-6)
+        aspect_ratio = minor_d / (major_d + 1e-6)
 
-        # Half-blink rejection filter
-        if aspect_ratio < 0.65:
+        # Blink rejection filter (only reject when eye is almost completely closed or tiny noise)
+        if aspect_ratio < 0.20 or area < 15.0:
             self._prev_center = None
+            self._prev_ellipse = None
             return self._empty_datum(frame)
 
-        raw_conf = float(np.sqrt(max(0.0, area_ratio * aspect_ratio)))
-        confidence = float(np.clip(raw_conf, 0.0, 1.0))
-        if np.isnan(confidence):
-            confidence = 0.0
+        # High confidence (1.0) on valid detection to ensure Pye3D (0.98 threshold) updates the 3D eyeball
+        confidence = 1.0
 
-        # Temporal EMA smoothing & jump rejection
-        if self._prev_center is not None:
-            dist = np.sqrt((cx - self._prev_center[0]) ** 2 + (cy - self._prev_center[1]) ** 2)
+        # Temporal EMA smoothing across all ellipse parameters (center, axes, angle)
+        if getattr(self, "_prev_ellipse", None) is not None:
+            p_c, p_ax, p_ang = self._prev_ellipse
+            dist = np.sqrt((cx - p_c[0]) ** 2 + (cy - p_c[1]) ** 2)
             if dist > 40.0:
                 self._consecutive_jumps += 1
                 if self._consecutive_jumps < 5:
                     confidence = 0.0
-                    cx, cy = self._prev_center
+                    cx, cy = p_c
+                    minor_d, major_d = p_ax
+                    angle_deg = p_ang
                 else:
                     self._consecutive_jumps = 0
             else:
                 self._consecutive_jumps = 0
 
             a = self._smooth_alpha
-            cx = a * cx + (1.0 - a) * self._prev_center[0]
-            cy = a * cy + (1.0 - a) * self._prev_center[1]
+            cx = a * cx + (1.0 - a) * p_c[0]
+            cy = a * cy + (1.0 - a) * p_c[1]
+            minor_d = a * minor_d + (1.0 - a) * p_ax[0]
+            major_d = a * major_d + (1.0 - a) * p_ax[1]
+
+            # Continuous circular angle smoothing (mod 180 deg)
+            diff_ang = (angle_deg - p_ang + 90.0) % 180.0 - 90.0
+            angle_deg = (p_ang + a * diff_ang) % 180.0
         else:
             self._consecutive_jumps = 0
 
+        self._prev_ellipse = ((cx, cy), (minor_d, major_d), angle_deg)
         self._prev_center = (cx, cy)
 
         result = {
             "location": (float(cx), float(cy)),
-            "diameter": float(MA),
+            "diameter": float(major_d),
             "confidence": confidence,
             "ellipse": {
-                "axes": (float(MA), float(ma)),
+                "axes": (float(minor_d), float(major_d)),
                 "angle": float(angle_deg),
                 "center": (float(cx), float(cy)),
             },
@@ -658,92 +672,7 @@ class Detector2DPlugin(PupilDetectorPlugin):
     def on_notify(self, notification):
         subj = notification.get("subject", "").lower()
         
-        # --- Handle Accuracy Logging ---
-        if getattr(self.g_pool, "eye_id", 0) == 0:
-            if subj == "calibration.successful" or subj == "validation.stopped":
-                import threading
-                import time
-                
-                def log_extraction_worker():
-                    time.sleep(0.5)  # Wait 0.5s for logs to flush
-                    try:
-                        log_path = os.path.expanduser("~/PycharmProjects/pupil/pupil_capture.log")
-                        if os.path.exists(log_path):
-                            with open(log_path, "r", encoding="utf-8") as lf:
-                                lines = lf.readlines()
-                            
-                            active_model = getattr(self, "active_model", "Mamba3 (T=5)")
-                            from .experiment_logger import save_accuracy_log
-                            
-                            if subj == "calibration.successful":
-                                rmse_val = None
-                                accuracy_val = None
-                                precision_val = None
-                                for line in reversed(lines):
-                                    if "Fitting. RMSE =" in line and rmse_val is None:
-                                        parts = line.split("RMSE =")
-                                        if len(parts) > 1:
-                                            rmse_val = parts[1].strip().split("px")[0].strip() + " px"
-                                    elif "accuracy_visualizer: Angular accuracy:" in line and accuracy_val is None:
-                                        parts = line.split("accuracy:")
-                                        if len(parts) > 1:
-                                            try:
-                                                accuracy_val = float(parts[1].strip().split("degrees")[0].strip())
-                                            except Exception:
-                                                pass
-                                    elif "accuracy_visualizer: Angular precision:" in line and precision_val is None:
-                                        parts = line.split("precision:")
-                                        if len(parts) > 1:
-                                            try:
-                                                precision_val = float(parts[1].strip().split("degrees")[0].strip())
-                                            except Exception:
-                                                pass
-                                    if "Starting  Calibration" in line or "Starting  Validation" in line:
-                                        break
-                                
-                                save_accuracy_log(
-                                    g_pool=self.g_pool,
-                                    active_model=active_model,
-                                    exp_type="calibration",
-                                    accuracy_value=accuracy_val,
-                                    precision_value=precision_val,
-                                    rmse_value=rmse_val
-                                )
-                                
-                            elif subj == "validation.stopped":
-                                accuracy_val = None
-                                precision_val = None
-                                for line in reversed(lines):
-                                    if "accuracy_visualizer: Angular accuracy:" in line and accuracy_val is None:
-                                        parts = line.split("accuracy:")
-                                        if len(parts) > 1:
-                                            try:
-                                                accuracy_val = float(parts[1].strip().split("degrees")[0].strip())
-                                            except Exception:
-                                                pass
-                                    elif "accuracy_visualizer: Angular precision:" in line and precision_val is None:
-                                        parts = line.split("precision:")
-                                        if len(parts) > 1:
-                                            try:
-                                                precision_val = float(parts[1].strip().split("degrees")[0].strip())
-                                            except Exception:
-                                                pass
-                                    if "Starting  Validation" in line:
-                                        break
-                                
-                                if accuracy_val is not None:
-                                    save_accuracy_log(
-                                        g_pool=self.g_pool,
-                                        active_model=active_model,
-                                        exp_type="test",
-                                        accuracy_value=accuracy_val,
-                                        precision_value=precision_val
-                                    )
-                    except Exception as ex:
-                        logger.error(f"Failed in log_extraction_worker: {ex}")
-                
-                threading.Thread(target=log_extraction_worker, daemon=True).start()
-        
+
         if subj == "calibration.set_enabled":
             val = bool(notification.get("enabled", True))
             if hasattr(self, "g_pool") and self.g_pool is not None:

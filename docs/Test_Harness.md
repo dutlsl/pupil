@@ -93,11 +93,11 @@ Pupil Core 스마트 글래스의 광학 거울 반사 구조상 Eye 0 카메라
 
 ---
 
-## 5. 입력 규격 및 자동 변환 파이프라인 (Data Pipeline)
+## 5. 입력 규격 및 처리 파이프라인 (Data Pipeline)
 
-| 항목 | Pupil Core 카메라 (실제 입력) | OpenEDS 학습 모델 (내부 연산) | 자동 처리 방식 |
+| 항목 | Pupil Core 카메라 (실제 입력) | 모델 추론 | 처리 방식 |
 |:---|:---|:---|:---|
-| **해상도** | $192 \times 192$ (정사각형) | $640 \times 400$ (직사각형) | **Letterboxing**: 비율 유지 $400\times400$ 확대 $\rightarrow$ 좌우 120px 패딩 후 추론 $\rightarrow$ 120px 슬라이싱 복원 |
+| **해상도 및 규격** | $192 \times 192$ (정사각형) | 정사각형 입력 규격 | **Native Direct Input**: 인위적인 패딩/슬라이싱 없이 원본 정사각형 프레임을 정규화 후 모델에 직접 입력 및 1:1 역변환 |
 | **밝기 정규화** | 동적 IR 조명 변화 | Z-Score Normalization | **Dynamic Normalization**: 프레임별 `(frame - mean) / std` 적용 |
 
 ---

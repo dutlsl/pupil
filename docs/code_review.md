@@ -1,5 +1,4 @@
 # Pupil + Vivim-Mamba3 통합 코드 리뷰
-
 > **리뷰 대상**: Pupil Labs Eye Tracking Platform (커스텀 포크)
 > **분석 시점**: [`main.py`](file:///home/byeongjun/PycharmProjects/pupil/pupil_src/main.py) (런처/IPC 엔트리포인트) → [`detector_2d_plugin.py`](file:///home/byeongjun/PycharmProjects/pupil/pupil_src/shared_modules/pupil_detector_plugins/detector_2d_plugin.py) (Vivim-Mamba3 추론 플러그인)
 > **날짜**: 2026-08-18

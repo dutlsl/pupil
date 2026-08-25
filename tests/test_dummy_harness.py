@@ -11,6 +11,11 @@ import time
 import numpy as np
 import cv2
 import torch
+# Monkeypatch missing low-precision float types in PyTorch <= 2.6.0
+if not hasattr(torch, "float4_e2m1fn_x2"):
+    torch.float4_e2m1fn_x2 = "dummy_float4_e2m1fn_x2"
+if not hasattr(torch, "float8_e8m0fnu"):
+    torch.float8_e8m0fnu = "dummy_float8_e8m0fnu"
 
 # Path setup
 PUPIL_SRC = os.path.expanduser("~/PycharmProjects/pupil/pupil_src")

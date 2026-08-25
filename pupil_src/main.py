@@ -4,24 +4,52 @@ os.environ["MKL_NUM_THREADS"] = "4"
 import platform
 import sys
 
-# Ephemeral log saving feature: automatically save console stdout & stderr logs to pupil_capture.log (mode="w") on each run
-class EphemeralLogTee:
-    def __init__(self, log_filepath, stream):
-        self.file = open(log_filepath, "w", encoding="utf-8")
+# Continuous session log saving: save full execution logs (from launch to exit) to both current run log and timestamped session log in recordings/
+import datetime
+
+session_log_path = os.environ.get("PUPIL_SESSION_LOG_PATH")
+if not session_log_path:
+    now_str = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    session_log_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "recordings", f"session_{now_str}.log"))
+    os.environ["PUPIL_SESSION_LOG_PATH"] = session_log_path
+
+log_file_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "pupil_capture.log"))
+
+class SessionLogTee:
+    def __init__(self, current_log_path, session_log_path, stream):
         self.stream = stream
+        self.files = []
+        try:
+            self.files.append(open(current_log_path, "a", encoding="utf-8"))
+        except Exception:
+            pass
+        try:
+            os.makedirs(os.path.dirname(session_log_path), exist_ok=True)
+            self.files.append(open(session_log_path, "a", encoding="utf-8"))
+        except Exception:
+            pass
 
     def write(self, data):
         self.stream.write(data)
-        self.file.write(data)
-        self.file.flush()
+        for f in self.files:
+            try:
+                f.write(data)
+                f.flush()
+            except Exception:
+                pass
 
     def flush(self):
         self.stream.flush()
-        self.file.flush()
+        for f in self.files:
+            try:
+                f.flush()
+            except Exception:
+                pass
 
-log_file_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "pupil_capture.log"))
-sys.stdout = EphemeralLogTee(log_file_path, sys.stdout)
-sys.stderr = EphemeralLogTee(log_file_path, sys.stderr)
+if not isinstance(sys.stdout, SessionLogTee):
+    sys.stdout = SessionLogTee(log_file_path, session_log_path, sys.stdout)
+if not isinstance(sys.stderr, SessionLogTee):
+    sys.stderr = SessionLogTee(log_file_path, session_log_path, sys.stderr)
 
 import torch as _torch
 _orig_load = _torch.load

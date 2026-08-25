@@ -51,10 +51,12 @@ class HybridDetector2DPlugin(Detector2DPlugin):
         return "Hybrid Pupil Detector"
 
     def _init_nnunet_models(self):
-        # Hybrid operation intentionally keeps the NIR side to RITnet. Loading the
-        # temporal nnUNet here would consume GPU memory and contend with TDTracker.
         self.temporal_model = None
         self.vanilla_2d_model = None
+
+    def _init_vivim_model(self):
+        # Hybrid operation intentionally keeps the NIR side to RITnet.
+        self.vivim_models = {}
 
     def __init__(self, g_pool=None, properties=None, detector_2d=None):
         super().__init__(

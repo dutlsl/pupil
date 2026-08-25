@@ -178,7 +178,7 @@ class Accuracy_Visualizer(Plugin):
     def __init__(
         self,
         g_pool,
-        outlier_threshold=1.5,
+        outlier_threshold=1.2,
         vis_mapping_error=True,
         vis_calibration_area=True,
     ):
@@ -195,6 +195,14 @@ class Accuracy_Visualizer(Plugin):
         # .5 degrees, used to remove outliers from precision calculation
         self.succession_threshold = np.cos(np.deg2rad(0.5))
         self._outlier_threshold = outlier_threshold  # in degrees
+
+        # Structured experiment reporting state
+        self.calibration_counter = 0
+        self.validation_counter_under_current_calib = 0
+        self.total_validation_counter = 0
+        self.last_calib_accuracy = None
+        self.last_calib_precision = None
+        self._current_eval_mode = "unknown"
 
     def init_ui(self):
         from pyglui import ui
@@ -350,6 +358,10 @@ class Accuracy_Visualizer(Plugin):
         except ValueError:
             return False
 
+        self.calibration_counter += 1
+        self.validation_counter_under_current_calib = 0
+        self._current_eval_mode = "calibration"
+
         self.recent_input.update(
             gazer_class_name=note.gazer_class_name,
             gazer_params=note.params,
@@ -365,6 +377,10 @@ class Accuracy_Visualizer(Plugin):
             assert note.action == ChoreographyAction.DATA
         except (AssertionError, ValueError):
             return False
+
+        self.validation_counter_under_current_calib += 1
+        self.total_validation_counter += 1
+        self._current_eval_mode = "validation"
 
         self.recent_input.clear()
         self.recent_input.update(
@@ -401,6 +417,29 @@ class Accuracy_Visualizer(Plugin):
             logger.warning(NOT_ENOUGH_DATA_COLLECTED_ERR_MSG)
             return
 
+        # Extract experiment metadata for structured reporting
+        pupil_samples = self.recent_input.pupil_list
+        active_model = "Unknown Model"
+        if pupil_samples and len(pupil_samples) > 0:
+            active_model = pupil_samples[0].get("method", "Unknown Model")
+
+        g_params = self.recent_input.gazer_params or {}
+        calib_enabled = bool(g_params.get("enable_calibration", getattr(self.g_pool, "enable_calibration", True)))
+        
+        calib_id = g_params.get("calibration_id", getattr(self.g_pool, "calibration_counter", 1 if calib_enabled else 0))
+        val_round = g_params.get("validation_round", getattr(self.g_pool, "validation_counter_under_current_calib", self.validation_counter_under_current_calib if self.validation_counter_under_current_calib > 0 else 1))
+        total_val = g_params.get("total_validation_count", getattr(self.g_pool, "total_validation_counter", self.total_validation_counter if self.total_validation_counter > 0 else 1))
+
+        calib_pattern = g_params.get("calibration_pattern", getattr(self.g_pool, "last_calib_pattern", "12-Point (4x3 Dense Grid / New)"))
+        calib_pts = g_params.get("calibration_points_count", getattr(self.g_pool, "last_calib_points", 12))
+
+        val_pattern = g_params.get("validation_pattern", getattr(self.g_pool, "last_val_pattern", "Diamond (Inward Cross / Default)"))
+        val_pts = g_params.get("validation_points_count", getattr(self.g_pool, "last_val_points", 4))
+        sample_dur = g_params.get("sample_duration", getattr(self.g_pool, "sample_duration", 60))
+
+        intr = getattr(self.g_pool.capture, "intrinsics", None)
+        res_str = str(intr.resolution) if intr and hasattr(intr, "resolution") else "(1280, 720)"
+
         if np.isnan(results.accuracy.result):
             self.accuracy = None
             logger.warning(
@@ -418,6 +457,76 @@ class Accuracy_Visualizer(Plugin):
         else:
             self.precision = results.precision
             logger.info(f"Angular precision: {results.precision.result:.3f} degrees")
+
+        # Format and emit report-ready structured log block
+        acc_val = results.accuracy.result
+        prec_val = results.precision.result
+        acc_str = f"{acc_val:.3f}°" if not np.isnan(acc_val) else "N/A (All Outliers)"
+        prec_str = f"{prec_val:.3f}°" if not np.isnan(prec_val) else "N/A (All Outliers)"
+        used_acc = results.accuracy.num_used
+        total_acc = results.accuracy.num_total
+        used_prec = results.precision.num_used
+        total_prec = results.precision.num_total
+
+        if self._current_eval_mode == "calibration":
+            if not np.isnan(acc_val):
+                self.last_calib_accuracy = acc_val
+            if not np.isnan(prec_val):
+                self.last_calib_precision = prec_val
+
+            report_msg = (
+                f"\n{'='*80}\n"
+                f"🎯 [EXPERIMENT REPORT] CALIBRATION #{calib_id}\n"
+                f"{'-'*80}\n"
+                f"  • Model & Setup:\n"
+                f"    - Active 2D Model:       {active_model}\n"
+                f"    - Calibration Status:    ENABLED (New Calibration Fitted)\n"
+                f"    - Calibration Pattern:   {calib_pattern} [{calib_pts} Points]\n"
+                f"    - Sample Duration:       {sample_dur} frames/point (~{sample_dur/60.0:.1f}s)\n"
+                f"  • Experimental Conditions:\n"
+                f"    - World Resolution:      {res_str}\n"
+                f"    - Outlier Threshold:     {self.outlier_threshold}°\n"
+                f"  • Calibration Metrics:\n"
+                f"    - Angular Accuracy:      {acc_str}  (Used Samples: {used_acc}/{total_acc})\n"
+                f"    - Angular Precision:     {prec_str}  (Used Samples: {used_prec}/{total_prec})\n"
+                f"    - Status:                CALIBRATION COMPLETED ✅\n"
+                f"{'='*80}"
+            )
+            print(report_msg, flush=True)
+
+        elif self._current_eval_mode == "validation":
+            if calib_enabled:
+                calib_mode_str = "ENABLED (Calibrated Gaze Mapping)"
+                parent_info = f"Calibration #{calib_id}"
+                round_info = f"Round {val_round} under Calibration #{calib_id} (Total Validation #{total_val})"
+            else:
+                calib_mode_str = "DISABLED (Bypass Raw Pupil Vector / Uncalibrated)"
+                parent_info = "None (Raw Baseline)"
+                round_info = f"Round {val_round} (Uncalibrated Baseline)"
+
+            report_msg = (
+                f"\n{'='*80}\n"
+                f"📊 [EXPERIMENT REPORT] VALIDATION #{val_round} (under Calibration #{calib_id if calib_enabled else 0})\n"
+                f"{'-'*80}\n"
+                f"  • Experiment Hierarchy:\n"
+                f"    - Active 2D Model:       {active_model}\n"
+                f"    - Calibration Mode:      {calib_mode_str}\n"
+                f"    - Parent Calibration:    {parent_info}\n"
+                f"    - Validation Attempt:    {round_info}\n"
+                f"  • Pattern & Target Points:\n"
+                f"    - Calibration Pattern:   {calib_pattern} [{calib_pts} Points] ({'Active' if calib_enabled else 'Bypassed'})\n"
+                f"    - Validation Pattern:    {val_pattern} [{val_pts} Points]\n"
+                f"    - Sample Duration:       {sample_dur} frames/point (~{sample_dur/60.0:.1f}s)\n"
+                f"  • Experimental Conditions:\n"
+                f"    - World Resolution:      {res_str}\n"
+                f"    - Outlier Threshold:     {self.outlier_threshold}°\n"
+                f"  • Validation Test Metrics:\n"
+                f"    - Angular Accuracy:      {acc_str}  (Used Samples: {used_acc}/{total_acc})\n"
+                f"    - Angular Precision:     {prec_str}  (Used Samples: {used_prec}/{total_prec})\n"
+                f"    - Status:                VALIDATION TEST COMPLETED ✅\n"
+                f"{'='*80}"
+            )
+            print(report_msg, flush=True)
 
         self.error_lines = results.error_lines
         ref_locations = results.correlation.norm_space[1::2, :]

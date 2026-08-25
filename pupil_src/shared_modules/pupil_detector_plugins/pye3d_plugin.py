@@ -387,21 +387,28 @@ class Pye3DPlugin(PupilDetectorPlugin):
         best_contour = max(contours, key=cv2.contourArea)
         if len(best_contour) < 5:
             return None
-        ellipse = cv2.fitEllipse(best_contour)  # ((cx,cy), (MA,ma), angle_deg)
-        (cx, cy), (MA, ma), angle_deg = ellipse
+        ellipse = cv2.fitEllipse(best_contour)  # ((cx,cy), (d1,d2), angle_deg)
+        (cx, cy), (d1, d2), angle_deg = ellipse
+
+        if d1 > d2:
+            minor_d, major_d = float(d2), float(d1)
+            angle_deg = (angle_deg + 90.0) % 180.0
+        else:
+            minor_d, major_d = float(d1), float(d2)
+            angle_deg = angle_deg % 180.0
 
         # (G) 임시 confidence 설정 (추후 정교한 계산 가능)
-        conf_val = 1.0
+        conf_val = 0.95
 
         # (H) RITnet 기반 2D datum 생성
         datum_2d = {
             "method": "2d c++",
             "location": (float(cx), float(cy)),
-            "diameter": float(MA),
+            "diameter": float(major_d),
             "confidence": conf_val,
             "timestamp": frame.timestamp,
             "ellipse": {
-                "axes": (float(MA), float(ma)),
+                "axes": (float(minor_d), float(major_d)),
                 "angle": float(angle_deg),
                 "center": (float(cx), float(cy)),
             },
