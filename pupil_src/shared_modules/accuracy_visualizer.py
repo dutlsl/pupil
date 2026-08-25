@@ -181,6 +181,7 @@ class Accuracy_Visualizer(Plugin):
         outlier_threshold=1.2,
         vis_mapping_error=True,
         vis_calibration_area=True,
+        enable_5stack_summary=True,
     ):
         super().__init__(g_pool)
         self.vis_mapping_error = vis_mapping_error
@@ -203,6 +204,16 @@ class Accuracy_Visualizer(Plugin):
         self.last_calib_accuracy = None
         self.last_calib_precision = None
         self._current_eval_mode = "unknown"
+
+        # 5-Stack Validation Demo Options & Accumulator State
+        self.enable_5stack_summary = enable_5stack_summary
+        self.stack_target_count = 5
+        self._val_stack = []
+        self._val_stack_details = []
+        self._stack_active = False
+        self._stack_calib_id = None
+        self._stack_calib_score = None
+        self._stack_model_name = "Unknown Model"
 
     def init_ui(self):
         from pyglui import ui
@@ -302,6 +313,23 @@ class Accuracy_Visualizer(Plugin):
             )
         )
 
+        demo_help = """5-Stack Validation Demo Summary: Triggered upon calibration
+                       start, accumulates 5 validation rounds (including fails)
+                       and outputs the Mean Accuracy, Standard Deviation, and Peak
+                       metrics to the console.""".replace(
+            "\n", " "
+        ).replace(
+            "  ", ""
+        )
+        self.menu.append(ui.Info_Text(demo_help))
+        self.menu.append(
+            ui.Switch(
+                "enable_5stack_summary",
+                self,
+                label="5-Stack Summary Demo Output",
+            )
+        )
+
     def deinit_ui(self):
         self.remove_menu()
 
@@ -316,7 +344,135 @@ class Accuracy_Visualizer(Plugin):
             {"subject": "accuracy_visualizer.outlier_threshold_changed", "delay": 0.5}
         )
 
+    def _init_5stack_session(self, reason: str = "Calibration Start"):
+        """Initializes a new 5-stack validation accumulation session upon calibration start."""
+        discarded = len(self._val_stack)
+        self._val_stack.clear()
+        self._val_stack_details.clear()
+        self._stack_active = True
+
+        calib_counter = getattr(self.g_pool, "calibration_counter", self.calibration_counter)
+        self._stack_calib_id = calib_counter + 1
+        self._stack_calib_score = None
+
+        if self.enable_5stack_summary:
+            discard_msg = f" (Previous incomplete stack of {discarded} rounds discarded)" if discarded > 0 else ""
+            print(
+                f"\n{'='*80}\n"
+                f"🚀 [5-STACK DEMO] New Evaluation Session Initialized (Target: {self.stack_target_count} Validation Rounds)\n"
+                f"   • Trigger: {reason}{discard_msg}\n"
+                f"   • Trigger Calibration ID: #{self._stack_calib_id}\n"
+                f"{'='*80}\n",
+                flush=True,
+            )
+
+    def _reset_5stack_if_incomplete(self, reason: str = "Interrupting Event"):
+        """Resets the 5-stack validation session if an interrupting event occurs before reaching 5 rounds."""
+        if self._stack_active and 0 < len(self._val_stack) < self.stack_target_count:
+            discarded = len(self._val_stack)
+            self._val_stack.clear()
+            self._val_stack_details.clear()
+            self._stack_active = False
+            if self.enable_5stack_summary:
+                print(
+                    f"\n⚠️ [5-STACK DEMO RESET] Validation stack RESET! ({discarded}/{self.stack_target_count} rounds discarded)\n"
+                    f"   • Reason: {reason}\n",
+                    flush=True,
+                )
+
+    def _print_5stack_summary(self, calib_id, val_pattern, val_pts, sample_dur):
+        """Calculates and prints the Mean Accuracy and Standard Deviation summary across 5 validation rounds."""
+        valid_accs = [x for x in self._val_stack if not np.isnan(x)]
+        valid_precs = [d["precision"] for d in self._val_stack_details if not np.isnan(d["precision"])]
+
+        num_total = len(self._val_stack)
+        num_valid = len(valid_accs)
+        num_fail = num_total - num_valid
+
+        if num_valid > 0:
+            mean_acc = float(np.mean(valid_accs))
+            std_acc = float(np.std(valid_accs, ddof=1)) if num_valid > 1 else (0.0 if num_valid == 1 else np.nan)
+            peak_acc = float(np.min(valid_accs))
+            mean_acc_str = f"{mean_acc:.3f}°  ({mean_acc:.4f} deg)"
+            std_acc_str = f"{std_acc:.3f}°  ({std_acc:.4f} deg)"
+            peak_acc_str = f"{peak_acc:.3f}°  ({peak_acc:.4f} deg)"
+        else:
+            mean_acc_str = "N/A (All 5 Rounds Failed)"
+            std_acc_str = "N/A"
+            peak_acc_str = "N/A"
+            mean_acc = np.nan
+            std_acc = np.nan
+            peak_acc = np.nan
+
+        if len(valid_precs) > 0:
+            mean_prec = float(np.mean(valid_precs))
+            mean_prec_str = f"{mean_prec:.3f}°  ({mean_prec:.4f} deg)"
+        else:
+            mean_prec_str = "N/A"
+
+        calib_score_str = f"{self._stack_calib_score:.3f}°" if self._stack_calib_score is not None else "N/A (Bypass / Uncalibrated)"
+
+        rounds_lines = []
+        for d in self._val_stack_details:
+            r_num = d["round"]
+            if d["is_fail"]:
+                r_line = f"    [{r_num}/{self.stack_target_count}]  Val Round #{r_num}:  FAIL (No Valid Samples / All Outliers) ❌"
+            else:
+                is_peak = (d["accuracy"] == peak_acc)
+                peak_badge = " 🌟 [PEAK BEST]" if is_peak and num_valid > 1 else ""
+                r_line = f"    [{r_num}/{self.stack_target_count}]  Val Round #{r_num}:  {d['accuracy']:.3f}°  (Precision: {d['precision']:.3f}°, Used: {d['samples_used']}/{d['samples_total']}) ✅{peak_badge}"
+            rounds_lines.append(r_line)
+        rounds_block = "\n".join(rounds_lines)
+
+        summary_msg = (
+            f"\n{'='*88}\n"
+            f"🏆 [DEMO REPORT] 5-STACK VALIDATION ACCURACY & STD STATISTICAL SUMMARY\n"
+            f"{'='*88}\n"
+            f"  📋 Experiment Context:\n"
+            f"    • Active 2D Model:         {self._stack_model_name}\n"
+            f"    • Parent Calibration:      #{calib_id} (Calibration Score: {calib_score_str})\n"
+            f"    • Outlier Threshold:       {self.outlier_threshold}°\n"
+            f"    • Validation Pattern:      {val_pattern} [{val_pts} Points]\n"
+            f"    • Sample Duration:         {sample_dur} frames/point (~{sample_dur/60.0:.1f}s)\n"
+            f"{'-'*88}\n"
+            f"  📊 5 Validation Rounds (Fails included in count):\n"
+            f"{rounds_block}\n"
+            f"{'-'*88}\n"
+            f"  🎯 5-Stack Statistical Summary (시연 결과 요약):\n"
+            f"    ★ Mean Accuracy (평균값):         {mean_acc_str}\n"
+            f"    ★ Std Deviation (표준편차 σ):     {std_acc_str}\n"
+            f"    ★ Peak (최고) Accuracy:          {peak_acc_str}\n"
+            f"    ★ Mean Precision (정밀도):        {mean_prec_str}\n"
+            f"    ★ Evaluation Rate:               {num_valid} / {num_total} Passed ({num_fail} Failed)\n"
+            f"{'='*88}\n"
+        )
+        print(summary_msg, flush=True)
+
     def on_notify(self, notification):
+        subj = str(notification.get("subject", "")).lower()
+
+        # Calibration Start Events -> Trigger/Initialize 5-Stack Session
+        is_calib_start = (
+            subj in ("calibration.should_start", "calibration.started", "calibration.setup")
+            or (subj.startswith("calibration.") and subj.endswith((".should_start", ".started", ".setup")))
+        )
+
+        # Interrupting Events -> Reset incomplete 5-Stack session
+        is_interrupting = (
+            subj in (
+                "calibration.should_stop",
+                "calibration.stopped",
+                "calibration.failed",
+                "calibration.set_enabled",
+                "accuracy_visualizer.outlier_threshold_changed",
+            )
+        )
+
+        if is_calib_start:
+            self._init_5stack_session(reason=f"Calibration Start Event ('{subj}')")
+        elif is_interrupting:
+            self._reset_5stack_if_incomplete(reason=f"Interrupting Event ('{subj}')")
+
         if self.__handle_calibration_setup_notification(notification):
             return
 
@@ -326,11 +482,11 @@ class Accuracy_Visualizer(Plugin):
         if self.__handle_validation_data_notification(notification):
             return
 
-        if notification["subject"] == "accuracy_visualizer.outlier_threshold_changed":
+        if notification.get("subject") == "accuracy_visualizer.outlier_threshold_changed":
             if self.recent_input.is_complete:
                 self.recalculate()
 
-        if notification["subject"] == "calibration.set_enabled":
+        if notification.get("subject") == "calibration.set_enabled":
             enabled = bool(notification.get("enabled", True))
             if hasattr(self, "g_pool") and self.g_pool is not None:
                 self.g_pool.enable_calibration = enabled
@@ -361,6 +517,7 @@ class Accuracy_Visualizer(Plugin):
         self.calibration_counter += 1
         self.validation_counter_under_current_calib = 0
         self._current_eval_mode = "calibration"
+        self._stack_calib_id = self.calibration_counter
 
         self.recent_input.update(
             gazer_class_name=note.gazer_class_name,
@@ -413,10 +570,6 @@ class Accuracy_Visualizer(Plugin):
             succession_threshold=self.succession_threshold,
         )
 
-        if not results.is_valid:
-            logger.warning(NOT_ENOUGH_DATA_COLLECTED_ERR_MSG)
-            return
-
         # Extract experiment metadata for structured reporting
         pupil_samples = self.recent_input.pupil_list
         active_model = "Unknown Model"
@@ -425,8 +578,8 @@ class Accuracy_Visualizer(Plugin):
 
         g_params = self.recent_input.gazer_params or {}
         calib_enabled = bool(g_params.get("enable_calibration", getattr(self.g_pool, "enable_calibration", True)))
-        
-        calib_id = g_params.get("calibration_id", getattr(self.g_pool, "calibration_counter", 1 if calib_enabled else 0))
+
+        calib_id = g_params.get("calibration_id", getattr(self.g_pool, "calibration_counter", self._stack_calib_id or (1 if calib_enabled else 0)))
         val_round = g_params.get("validation_round", getattr(self.g_pool, "validation_counter_under_current_calib", self.validation_counter_under_current_calib if self.validation_counter_under_current_calib > 0 else 1))
         total_val = g_params.get("total_validation_count", getattr(self.g_pool, "total_validation_counter", self.total_validation_counter if self.total_validation_counter > 0 else 1))
 
@@ -440,37 +593,36 @@ class Accuracy_Visualizer(Plugin):
         intr = getattr(self.g_pool.capture, "intrinsics", None)
         res_str = str(intr.resolution) if intr and hasattr(intr, "resolution") else "(1280, 720)"
 
-        if np.isnan(results.accuracy.result):
+        is_calc_valid = results.is_valid and not np.isnan(results.accuracy.result)
+        acc_val = results.accuracy.result if is_calc_valid else np.nan
+        prec_val = results.precision.result if (results.is_valid and not np.isnan(results.precision.result)) else np.nan
+
+        if not is_calc_valid:
             self.accuracy = None
-            logger.warning(
-                "Not enough data available for angular accuracy calculation."
-            )
+            logger.warning("Not enough data available for angular accuracy calculation.")
         else:
             self.accuracy = results.accuracy
             logger.info(f"Angular accuracy: {results.accuracy.result:.3f} degrees")
 
-        if np.isnan(results.precision.result):
+        if not (results.is_valid and not np.isnan(results.precision.result)):
             self.precision = None
-            logger.warning(
-                "Not enough data available for angular precision calculation."
-            )
+            logger.warning("Not enough data available for angular precision calculation.")
         else:
             self.precision = results.precision
             logger.info(f"Angular precision: {results.precision.result:.3f} degrees")
 
-        # Format and emit report-ready structured log block
-        acc_val = results.accuracy.result
-        prec_val = results.precision.result
-        acc_str = f"{acc_val:.3f}°" if not np.isnan(acc_val) else "N/A (All Outliers)"
-        prec_str = f"{prec_val:.3f}°" if not np.isnan(prec_val) else "N/A (All Outliers)"
-        used_acc = results.accuracy.num_used
-        total_acc = results.accuracy.num_total
-        used_prec = results.precision.num_used
-        total_prec = results.precision.num_total
+        # Format metrics strings
+        acc_str = f"{acc_val:.3f}°" if not np.isnan(acc_val) else "FAIL (All Outliers / No Correlation)"
+        prec_str = f"{prec_val:.3f}°" if not np.isnan(prec_val) else "FAIL (N/A)"
+        used_acc = results.accuracy.num_used if is_calc_valid else 0
+        total_acc = results.accuracy.num_total if is_calc_valid else (len(self.recent_input.ref_list) if self.recent_input.ref_list else 0)
+        used_prec = results.precision.num_used if (results.is_valid and not np.isnan(results.precision.result)) else 0
+        total_prec = results.precision.num_total if (results.is_valid and not np.isnan(results.precision.result)) else 0
 
         if self._current_eval_mode == "calibration":
             if not np.isnan(acc_val):
                 self.last_calib_accuracy = acc_val
+                self._stack_calib_score = acc_val
             if not np.isnan(prec_val):
                 self.last_calib_precision = prec_val
 
@@ -489,7 +641,7 @@ class Accuracy_Visualizer(Plugin):
                 f"  • Calibration Metrics:\n"
                 f"    - Angular Accuracy:      {acc_str}  (Used Samples: {used_acc}/{total_acc})\n"
                 f"    - Angular Precision:     {prec_str}  (Used Samples: {used_prec}/{total_prec})\n"
-                f"    - Status:                CALIBRATION COMPLETED ✅\n"
+                f"    - Status:                {'CALIBRATION COMPLETED ✅' if is_calc_valid else 'CALIBRATION FAILED ❌'}\n"
                 f"{'='*80}"
             )
             print(report_msg, flush=True)
@@ -523,21 +675,58 @@ class Accuracy_Visualizer(Plugin):
                 f"  • Validation Test Metrics:\n"
                 f"    - Angular Accuracy:      {acc_str}  (Used Samples: {used_acc}/{total_acc})\n"
                 f"    - Angular Precision:     {prec_str}  (Used Samples: {used_prec}/{total_prec})\n"
-                f"    - Status:                VALIDATION TEST COMPLETED ✅\n"
+                f"    - Status:                {'VALIDATION TEST COMPLETED ✅' if is_calc_valid else 'VALIDATION TEST FAILED ❌'}\n"
                 f"{'='*80}"
             )
             print(report_msg, flush=True)
 
+            # 5-Stack Validation Demo Accumulation
+            if self.enable_5stack_summary:
+                if not self._stack_active:
+                    self._stack_active = True
+                    self._stack_calib_id = calib_id
+
+                curr_round = len(self._val_stack) + 1
+                self._val_stack.append(acc_val)
+                self._val_stack_details.append({
+                    "round": curr_round,
+                    "accuracy": acc_val,
+                    "precision": prec_val,
+                    "is_fail": not is_calc_valid,
+                    "samples_used": used_acc,
+                    "samples_total": total_acc,
+                })
+                self._stack_model_name = active_model
+
+                if len(self._val_stack) < self.stack_target_count:
+                    status_text = f"{acc_val:.3f}° ✅" if is_calc_valid else "FAIL ❌"
+                    print(
+                        f"📌 [5-Stack Demo Progress] Round #{curr_round}/{self.stack_target_count} Stacked: {status_text} "
+                        f"({self.stack_target_count - curr_round} rounds remaining until 5-stack statistical summary)\n",
+                        flush=True,
+                    )
+                elif len(self._val_stack) >= self.stack_target_count:
+                    self._print_5stack_summary(
+                        calib_id=calib_id,
+                        val_pattern=val_pattern,
+                        val_pts=val_pts,
+                        sample_dur=sample_dur,
+                    )
+                    # Reset stack for the next sequence
+                    self._val_stack.clear()
+                    self._val_stack_details.clear()
+
         self.error_lines = results.error_lines
-        ref_locations = results.correlation.norm_space[1::2, :]
-        if len(ref_locations) >= 3:
-            try:
-                # requires at least 3 points
-                hull = scipy.spatial.ConvexHull(ref_locations)
-                self.calibration_area = hull.points[hull.vertices, :]
-            except scipy.spatial.qhull.QhullError:
-                logger.warning("Calibration area could not be calculated")
-                logger.debug(traceback.format_exc())
+        if results.correlation.is_valid and len(results.correlation.norm_space.shape) == 2 and len(results.correlation.norm_space) >= 2:
+            ref_locations = results.correlation.norm_space[1::2, :]
+            if len(ref_locations) >= 3:
+                try:
+                    # requires at least 3 points
+                    hull = scipy.spatial.ConvexHull(ref_locations)
+                    self.calibration_area = hull.points[hull.vertices, :]
+                except scipy.spatial.qhull.QhullError:
+                    logger.warning("Calibration area could not be calculated")
+                    logger.debug(traceback.format_exc())
 
     @staticmethod
     def calc_acc_prec_errlines(
