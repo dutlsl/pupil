@@ -178,10 +178,10 @@ class Accuracy_Visualizer(Plugin):
     def __init__(
         self,
         g_pool,
-        outlier_threshold=1.2,
+        outlier_threshold=1.3,
         vis_mapping_error=True,
         vis_calibration_area=True,
-        enable_5stack_summary=True,
+        enable_5stack_summary=False,
     ):
         super().__init__(g_pool)
         self.vis_mapping_error = vis_mapping_error
@@ -206,14 +206,32 @@ class Accuracy_Visualizer(Plugin):
         self._current_eval_mode = "unknown"
 
         # 5-Stack Validation Demo Options & Accumulator State
-        self.enable_5stack_summary = enable_5stack_summary
+        # Check if g_pool already holds a user-toggled enable_5stack_summary
+        if hasattr(g_pool, "enable_5stack_summary"):
+            self._enable_5stack_summary = bool(g_pool.enable_5stack_summary)
+        else:
+            self._enable_5stack_summary = bool(enable_5stack_summary)
+            if hasattr(g_pool, "enable_5stack_summary"):
+                g_pool.enable_5stack_summary = self._enable_5stack_summary
+
         self.stack_target_count = 5
-        self._val_stack = []
-        self._val_stack_details = []
-        self._stack_active = False
-        self._stack_calib_id = None
-        self._stack_calib_score = None
-        self._stack_model_name = "Unknown Model"
+
+        # Persistent session state attached to g_pool
+        if not hasattr(g_pool, "_accuracy_vis_val_stack"):
+            g_pool._accuracy_vis_val_stack = []
+        if not hasattr(g_pool, "_accuracy_vis_val_stack_details"):
+            g_pool._accuracy_vis_val_stack_details = []
+        if not hasattr(g_pool, "_accuracy_vis_stack_active"):
+            g_pool._accuracy_vis_stack_active = False
+        if not hasattr(g_pool, "_accuracy_vis_stack_calib_id"):
+            g_pool._accuracy_vis_stack_calib_id = None
+        if not hasattr(g_pool, "_accuracy_vis_stack_calib_score"):
+            g_pool._accuracy_vis_stack_calib_score = None
+        if not hasattr(g_pool, "_accuracy_vis_stack_model_name"):
+            g_pool._accuracy_vis_stack_model_name = "Unknown Model"
+
+        self._val_stack = g_pool._accuracy_vis_val_stack
+        self._val_stack_details = g_pool._accuracy_vis_val_stack_details
 
     def init_ui(self):
         from pyglui import ui
@@ -343,6 +361,63 @@ class Accuracy_Visualizer(Plugin):
         self.notify_all(
             {"subject": "accuracy_visualizer.outlier_threshold_changed", "delay": 0.5}
         )
+
+    @property
+    def enable_5stack_summary(self) -> bool:
+        if hasattr(self, "g_pool") and hasattr(self.g_pool, "enable_5stack_summary"):
+            return bool(self.g_pool.enable_5stack_summary)
+        return getattr(self, "_enable_5stack_summary", False)
+
+    @enable_5stack_summary.setter
+    def enable_5stack_summary(self, val: bool):
+        val = bool(val)
+        self._enable_5stack_summary = val
+        if hasattr(self, "g_pool") and self.g_pool is not None:
+            self.g_pool.enable_5stack_summary = val
+
+    @property
+    def _stack_active(self) -> bool:
+        if hasattr(self, "g_pool") and hasattr(self.g_pool, "_accuracy_vis_stack_active"):
+            return bool(self.g_pool._accuracy_vis_stack_active)
+        return False
+
+    @_stack_active.setter
+    def _stack_active(self, val: bool):
+        if hasattr(self, "g_pool") and self.g_pool is not None:
+            self.g_pool._accuracy_vis_stack_active = bool(val)
+
+    @property
+    def _stack_calib_id(self):
+        if hasattr(self, "g_pool") and hasattr(self.g_pool, "_accuracy_vis_stack_calib_id"):
+            return self.g_pool._accuracy_vis_stack_calib_id
+        return None
+
+    @_stack_calib_id.setter
+    def _stack_calib_id(self, val):
+        if hasattr(self, "g_pool") and self.g_pool is not None:
+            self.g_pool._accuracy_vis_stack_calib_id = val
+
+    @property
+    def _stack_calib_score(self):
+        if hasattr(self, "g_pool") and hasattr(self.g_pool, "_accuracy_vis_stack_calib_score"):
+            return self.g_pool._accuracy_vis_stack_calib_score
+        return None
+
+    @_stack_calib_score.setter
+    def _stack_calib_score(self, val):
+        if hasattr(self, "g_pool") and self.g_pool is not None:
+            self.g_pool._accuracy_vis_stack_calib_score = val
+
+    @property
+    def _stack_model_name(self):
+        if hasattr(self, "g_pool") and hasattr(self.g_pool, "_accuracy_vis_stack_model_name"):
+            return self.g_pool._accuracy_vis_stack_model_name
+        return "Unknown Model"
+
+    @_stack_model_name.setter
+    def _stack_model_name(self, val):
+        if hasattr(self, "g_pool") and self.g_pool is not None:
+            self.g_pool._accuracy_vis_stack_model_name = val
 
     def _init_5stack_session(self, reason: str = "Calibration Start"):
         """Initializes a new 5-stack validation accumulation session upon calibration start."""
@@ -932,4 +1007,5 @@ class Accuracy_Visualizer(Plugin):
             "outlier_threshold": self.outlier_threshold,
             "vis_mapping_error": self.vis_mapping_error,
             "vis_calibration_area": self.vis_calibration_area,
+            "enable_5stack_summary": self.enable_5stack_summary,
         }

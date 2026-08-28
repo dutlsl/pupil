@@ -124,6 +124,6 @@ def _detect_mynew_model(self, frame, **kwargs):
 `_postprocess_mask_to_datum()`은 세그멘테이션 마스크로부터 동공 클래스(`PUPIL_CLASS_ID = 3`)를 추출하여:
 - 가우시안 블러 및 이진화 (Anti-aliasing)
 - 최대 컨투어 검색 및 타원 피팅 (`cv2.fitEllipse`)
-- 기울어진 동공 타원 보존 필터 (`aspect_ratio < 0.40`)
+- 블링크 및 왜곡 동공 필터 (`aspect_ratio < 0.20 or area < 15.0`)
 - 지수 이동 평균(EMA) 스무딩 (`α = 0.4`) 및 점프 거부 (`40px`)
 - 정규화 좌표(`norm_pos`) 및 타원 기하 정보를 담은 Pupil `datum` 딕셔너리 생성을 일괄 처리합니다.

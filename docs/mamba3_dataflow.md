@@ -31,12 +31,12 @@ with torch.inference_mode():
     pred_mask_448 = logits.argmax(dim=1).squeeze(0).cpu().numpy().astype(np.uint8)
 ```
 
-여기서 `model`은 `self.vivim_models[t_val]`로, [`VivimBackbone`](file:///home/byeongjun/PycharmProjects/nnUNet/models/vivim_backbone.py) 인스턴스입니다.
+여기서 `model`은 `self.vivim_models[t_val]`로, [`VivimBackbone`](file:///home/byeongjun/PycharmProjects/pupil/pupil_src/shared_modules/pupil_detector_plugins/vivim/vivim_backbone.py) 인스턴스입니다.
 
 ### 1.3 VivimBackbone 내부에서 실제 Mamba3 SSM 실행
 
 ```
-VivimBackbone.forward(x)                              # x: [B, T, 1, 448, 448]
+VivimBackbone.forward(x)                              # x: [B, T, 1, 448, 448] (T=7)
   ├─ 2D Encoder (enc1→enc2→enc3→bottleneck)           # 프레임별 특성 추출
   ├─ TemporalMambaBlock.forward(b_seq)                 # b_seq: [B, T, 256, 56, 56]
   │    ├─ reshape → [B*H*W, T, C]                     # 공간 위치별 시간 시퀀스
@@ -53,9 +53,9 @@ VivimBackbone.forward(x)                              # x: [B, T, 1, 448, 448]
 
 | 파일 | 경로 | 역할 |
 |------|------|------|
-| `VivimBackbone` | [`~/PycharmProjects/nnUNet/models/vivim_backbone.py`](file:///home/byeongjun/PycharmProjects/nnUNet/models/vivim_backbone.py) | 2D UNet + Temporal Mamba 통합 |
-| `TemporalMambaBlock` | [`~/PycharmProjects/nnUNet/models/temporal_mamba.py`](file:///home/byeongjun/PycharmProjects/nnUNet/models/temporal_mamba.py) | 공간→시간축 변환 + Mamba 적용 |
-| `MambaLayer` | [`~/PycharmProjects/nnUNet/models/mamba_block.py`](file:///home/byeongjun/PycharmProjects/nnUNet/models/mamba_block.py) | `mamba_ssm.Mamba3` 래퍼 |
+| `VivimBackbone` | [`pupil_src/shared_modules/pupil_detector_plugins/vivim/vivim_backbone.py`](file:///home/byeongjun/PycharmProjects/pupil/pupil_src/shared_modules/pupil_detector_plugins/vivim/vivim_backbone.py) | 2D UNet + Temporal Mamba 통합 |
+| `TemporalMambaBlock` | [`pupil_src/shared_modules/pupil_detector_plugins/vivim/temporal_mamba.py`](file:///home/byeongjun/PycharmProjects/pupil/pupil_src/shared_modules/pupil_detector_plugins/vivim/temporal_mamba.py) | 공간→시간축 변환 + Mamba 적용 |
+| `MambaLayer` | [`pupil_src/shared_modules/pupil_detector_plugins/vivim/mamba_block.py`](file:///home/byeongjun/PycharmProjects/pupil/pupil_src/shared_modules/pupil_detector_plugins/vivim/mamba_block.py) | `mamba_ssm.Mamba3` 래퍼 |
 
 ---
 
@@ -87,9 +87,9 @@ graph TD
     J --> K
 
     subgraph STAGE3["Stage 3: 필터링 & 평활화"]
-        K["Half-Blink 거부<br/>aspect_ratio < 0.65 → reject"]
-        K --> L["Confidence 계산<br/>√(area_ratio × aspect_ratio)"]
-        L --> M["EMA 시간 평활화<br/>α=0.4, jump 40px 임계"]
+        K["Blink / Noise 거부<br/>aspect_ratio < 0.20 or area < 15.0 → reject"]
+        K --> L["Jump Rejection (40px)<br/>dist > 40px (<5 frames: conf=0.0)"]
+        L --> M["EMA 시간 평활화 (α=0.4)<br/>cx_new = 0.4*cx + 0.6*cx_prev"]
     end
 
     M --> N
@@ -117,16 +117,16 @@ graph TD
 
     subgraph STAGE7["Stage 7: 정확도 계산"]
         T["Accuracy_Visualizer.recalculate()"]
-        T --> U["calc_acc_prec_errlines()<br/>Angular Accuracy / Precision"]
+        T --> U["calc_acc_prec_errlines()<br/>Angular Accuracy / Precision (Threshold 1.2°)"]
         U --> V["logger.info()<br/>'Angular accuracy: X.XXX degrees'"]
     end
 
     V --> W
 
-    subgraph STAGE8["Stage 8: 실험 로그 저장"]
+    subgraph STAGE8["Stage 8: 실험 로그 저장 & 5-Stack 요약"]
         W["on_notify: calibration.successful / validation.stopped"]
         W --> X["log_extraction_worker()<br/>pupil_capture.log 역순 파싱"]
-        X --> Y["experiment_logger.save_accuracy_log()<br/>recordings/*.log 저장"]
+        X --> Y["experiment_logger.save_accuracy_log()<br/>recordings/*.log 저장 & 5-Stack 요약"]
     end
 
     style A fill:#2d6a4f,stroke:#1b4332,color:#fff
@@ -193,18 +193,21 @@ ellipse = cv2.fitEllipse(best_contour)
 **위치**: [`detector_2d_plugin.py` L462-491](file:///home/byeongjun/PycharmProjects/pupil/pupil_src/shared_modules/pupil_detector_plugins/detector_2d_plugin.py#L462-L491)
 
 ```
-┌─ Half-Blink 거부 ─────────────────────────────┐
+┌─ Blink / Noise 거부 ──────────────────────────┐
 │  aspect_ratio = min(MA,ma)/max(MA,ma)          │
-│  if aspect_ratio < 0.65 → 빈 datum 반환        │
-│  (눈 반쯤 감긴 상태에서의 잘못된 검출 방지)        │
+│  if aspect_ratio < 0.20 or area < 15.0:       │
+│      → 빈 datum 반환                          │
+│  (눈 감김 및 심한 왜곡 마스크 검출 방지)      │
 └────────────────────────────────────────────────┘
          │ pass
          ▼
-┌─ Confidence 계산 ─────────────────────────────┐
-│  area_ratio = min(contour_area, ellipse_area)  │
-│              / max(contour_area, ellipse_area)  │
-│  confidence = √(area_ratio × aspect_ratio)     │
-│  clipped to [0.0, 1.0]                         │
+┌─ Confidence 설정 & Jump Rejection ─────────────┐
+│  confidence = 1.0 (유효 타원 검출)             │
+│                                                │
+│  Jump Rejection:                               │
+│    dist > 40px → consecutive_jumps++           │
+│    if jumps < 5 → confidence=0, 이전 좌표 유지 │
+│    if jumps ≥ 5 → 새 위치 수용 (실제 Saccade)  │
 └────────────────────────────────────────────────┘
          │
          ▼
@@ -212,11 +215,6 @@ ellipse = cv2.fitEllipse(best_contour)
 │  α = 0.4                                       │
 │  cx_new = 0.4·cx + 0.6·cx_prev                │
 │  cy_new = 0.4·cy + 0.6·cy_prev                │
-│                                                │
-│  Jump Rejection:                               │
-│    dist > 40px → consecutive_jumps++           │
-│    if jumps < 5 → confidence=0, 이전 좌표 유지   │
-│    if jumps ≥ 5 → 새 위치 수용 (실제 이동)       │
 └────────────────────────────────────────────────┘
 ```
 
@@ -319,7 +317,7 @@ def recalculate(self):
 Accuracy = arccos(mean(cos_distances))   (degrees)
 
   cos_distance = gaze_vector · ref_vector    (둘 다 단위 벡터)
-  outlier 제거: cos_distance > cos(threshold)
+  outlier 제거: cos_distance > cos(threshold)  (기본 outlier_threshold = 1.2°)
 ```
 
 ```

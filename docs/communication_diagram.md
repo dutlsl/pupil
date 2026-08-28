@@ -39,7 +39,7 @@
 │                        ▼                         │  │                     ▼                      │
 │  ┌────────────────────────────────────────────┐  │  │  ┌──────────────────────────────────────┐  │
 │  │ Detector2DPlugin (Mamba3 / RITnet / 2D C+) │  │  │  │ CalibrationChoreographyPlugin       │  │
-│  │ • Preprocess (Z-Score, Letterbox)          │  │  │  │ • Render Target (3x3 Grid / 1-Center)│  │
+│  │ • Preprocess (Z-Score, Letterbox)          │  │  │  │ • Render Target (5p/9p/12p / Diamond)│  │
 │  │ • Inference (VivimBackbone / DenseNet)     │  │  │  │ • Collect calib_data {pupil, ref}   │  │
 │  │ • Postprocess (Blur, EMA α=0.4, Jump-rej)  │  │  │  └──────────────────┬───────────────────┘  │
 │  └─────────────────────┬──────────────────────┘  │  │                     │ [5.1/5.2: calib/val] │
@@ -65,7 +65,8 @@
 │                                                  │  │  │ Accuracy_Visualizer                  │  │
 │                                                  │  │  │ • [6.2] calc_acc_prec_errlines       │  │
 │                                                  │  │  │ • Dispersion relaxation (0.2s..2.0s) │  │
-│                                                  │  │  │ • Outlier filter (1.5 deg threshold) │  │
+│                                                  │  │  │ • Outlier filter (1.2 deg threshold) │  │
+│                                                  │  │  │ • 5-Stack Validation Summary Console │  │
 │                                                  │  │  │ • Print "Angular accuracy: X.XXX"    │  │
 │                                                  │  │  └──────────────────────────────────────┘  │
 └──────────────────────────────────────────────────┘  └────────────────────────────────────────────┘
@@ -189,9 +190,9 @@
   │                   │                     │◀── 3. Dispatch ────┤                  │                  │                  │
   │                   │                     │ (Preserve State)   │                  │                  │                  │
   │                   │                     │                    │                  │                  │                  │
-  │                   │  [ 4. Loop: 1-Center (0.5, 0.7) x 5 Marker Collection (sample_duration=60) ]    │                  │
+  │                   │  [ 4. Loop: Diamond / 4-Corner Marker Collection (sample_duration=60) ]        │                  │
   │                   │  • Eye Process ───▶ PUB 'pupil.0.2d' ──▶ IPC Backbone ──▶ Choreography Buffer │                  │
-  │                   │  • ScreenMarkerPlugin renders center target & buffers new ref_list              │                  │
+  │                   │  • ScreenMarkerPlugin renders validation target & buffers new ref_list          │                  │
   │                   │                     │                    │                  │                  │                  │
   │                   │                     │                    │                  │                  │                  │
   ├── 5. Click 'T' ──▶│                     │                    │                  │                  │                  │
@@ -203,7 +204,8 @@
   │                   │                     │                    │                  │ (predict pos)    │                  │
   │                   │                     │                    │                  ├─────────────────▶│                  │
   │                   │                     │                    │                  │                  │ • Relax Dispers  │
-  │                   │                     │                    │                  │                  │ • Outlier 1.5 deg│
+  │                   │                     │                    │                  │                  │ • Outlier 1.2 deg│
+  │                   │                     │                    │                  │                  │ • 5-Stack check  │
   │                   │                     │                    │                  │                  ├── 8. Log Info ──▶│
   │                   │                     │                    │                  │                  │ ("Accuracy: 1.2")│
   │                   ├── 9. notify_all("validation.stopped") ──▶│                  │                  │                  │

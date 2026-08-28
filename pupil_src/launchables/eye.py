@@ -541,23 +541,39 @@ def eye(
         g_pool.iconbar.append(icon)
 
         plugins_to_load = session_settings.get("loaded_plugins", default_plugins)
-        if os.getenv("PUPIL_HYBRID_ENABLED", "0").strip().lower() not in {
+        hybrid_enabled = os.getenv("PUPIL_HYBRID_ENABLED", "0").strip().lower() not in {
             "",
             "0",
             "false",
             "no",
             "off",
-        }:
+        }
+        integrated_hybrid_enabled = hybrid_enabled and os.getenv(
+            "PUPIL_HYBRID_INTEGRATED", "0"
+        ).strip().lower() not in {"", "0", "false", "no", "off"}
+        if hybrid_enabled:
             # Detector class names are persisted in the session. Replace a saved
             # regular detector explicitly so Hybrid mode works without deleting the
             # user's unrelated camera/UI settings.
+            detector_names_to_replace = {
+                "Detector2DPlugin",
+                "HybridDetector2DPlugin",
+            }
+            if integrated_hybrid_enabled:
+                # main_int.py needs the specialised Pye3D hand-off plugin, not
+                # the persisted normal Pye3D instance. Having both would create
+                # competing Eye0 3D streams.
+                detector_names_to_replace.update(
+                    {"Pye3DPlugin", "HybridPye3DPlugin"}
+                )
             plugins_to_load = [
                 initializer
                 for initializer in plugins_to_load
-                if initializer[0]
-                not in {"Detector2DPlugin", "HybridDetector2DPlugin"}
+                if initializer[0] not in detector_names_to_replace
             ]
             plugins_to_load.append(("HybridDetector2DPlugin", {}))
+            if integrated_hybrid_enabled:
+                plugins_to_load.append(("HybridPye3DPlugin", {}))
         if overwrite_cap_settings:
             # Ensure that overwrite_cap_settings takes preference over source plugins
             # with incorrect settings that were loaded from session settings.

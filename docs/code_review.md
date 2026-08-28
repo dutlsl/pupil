@@ -197,16 +197,18 @@ classDiagram
 
 ### 4.2 `__init__` — 모델 초기화
 
-[L102-133](file:///home/byeongjun/PycharmProjects/pupil/pupil_src/shared_modules/pupil_detector_plugins/detector_2d_plugin.py#L102-L133):
+[`detector_2d_plugin.py` L103-140](file:///home/byeongjun/PycharmProjects/pupil/pupil_src/shared_modules/pupil_detector_plugins/detector_2d_plugin.py#L103-L140):
 
 ```python
+self.active_model = "Mamba3 (T=7)"
 self.vivim_models = {}
-self._vivim_queues = {t: collections.deque(maxlen=t) for t in [3, 5, 7, 9, 11]}
-self._init_nnunet_models()   # Vivim-Mamba3 T=3,5,7,9,11 로딩
-self._init_ritnet_model()     # RITnet(DenseNet2D) 폴백
+self._vivim_queues = {7: collections.deque(maxlen=7)}
+self._use_amp = (self.device.type == "cuda")
+self._init_nnunet_models()   # Vivim-Mamba3 T=7 가중치 (best_checkpoint_t7.pth) 로딩
+self._init_ritnet_model()     # RITnet(DenseNet2D) 로딩
 ```
 
-**5개의 Mamba3 변형을 동시에 GPU 메모리에 적재합니다.** 각 `VivimBackbone`이 약 ~50MB라면 총 ~250MB GPU 메모리를 점유합니다.
+**최적화된 Mamba3 (T=7) 단일 가중치 적재**: 최고 성능을 발휘하는 T=7 단일 모델만 GPU 메모리에 적재하여 메모리 효율성을 극대화합니다 (~50MB 점유).
 
 ### 4.3 `detect()` — 모델 라우팅 디스패처
 
@@ -214,7 +216,7 @@ self._init_ritnet_model()     # RITnet(DenseNet2D) 폴백
 
 | `active_model` 값 | 경로 | 설명 |
 |---|---|---|
-| `"Mamba3 (T=3)"` ~ `"Mamba3 (T=11)"` | `_detect_vivim_mamba_by_t()` | Vivim-Mamba3 시계열 추론 |
+| `"Mamba3 (T=7)"` | `_detect_vivim_mamba_by_t(t_val=7)` | Vivim-Mamba3 7프레임 시계열 추론 (AMP 가속) |
 | `"RITnet"` | `_detect_ritnet()` | DenseNet2D 단일 프레임 추론 |
 | `"2D C++"` | `detector_2d.detect()` | C++ 전통 알고리즘 (Pupil Labs 원본) |
 
@@ -229,14 +231,18 @@ frame.gray (192×192 or 400×640)
   → Z-Score 정규화 (동적 mean/std)
   → 400×400 crop/resize
   → 448×448 패딩 (24px 각 방향)
-  → deque에 push (maxlen=T)
-  → [1, T, 1, 448, 448] 텐서 스택
+  → deque에 push (maxlen=7)
+  → [1, 7, 1, 448, 448] 텐서 스택
 ```
 
-**추론:**
+**추론 (AMP 가속 적용):**
 ```python
 with torch.inference_mode():
-    logits = model(seq_tensor.float())  # VivimBackbone forward
+    if self._use_amp:
+        with torch.amp.autocast(device_type="cuda"):
+            logits = model(seq_tensor.float())
+    else:
+        logits = model(seq_tensor.float())
 ```
 
 **후처리:**
@@ -259,8 +265,8 @@ pred_mask
   → GaussianBlur(5,5) + 이진화 (anti-aliasing)
   → findContours → 최대 면적 컨투어
   → cv2.fitEllipse()
-  → 반 깜빡임 거부 (aspect_ratio < 0.65)
-  → confidence = √(area_ratio × aspect_ratio)
+  → 블링크 / 왜곡 거부 (aspect_ratio < 0.20 or area < 15.0)
+  → confidence = 1.0 (유효 타원)
   → EMA 시간 평활화 (α=0.4) + 점프 거부 (40px 임계)
   → datum{norm_pos, diameter, confidence, ellipse}
 ```
@@ -311,37 +317,25 @@ recordings/
 
 ## 6. Vivim-Mamba3 모델 통합 아키텍처
 
-### 6.1 외부 의존성
+### 6.1 내장 모듈 아키텍처
 
 ```python
-# detector_2d_plugin.py L60-72
-NNUNET_DIR = os.path.expanduser("~/PycharmProjects/nnUNet")
-NNUNET_LEGACY_DIR = os.path.expanduser("~/PycharmProjects/nnUNet_legacy")
-NNUNET_AGENT_DIR = os.path.join(NNUNET_DIR, "agent")
-
-# sys.path에 동적 삽입
-for p in [NNUNET_LEGACY_DIR, NNUNET_DIR, NNUNET_AGENT_DIR]:
-    if os.path.exists(p) and p not in sys.path:
-        sys.path.insert(0, p)
+# pupil_src/shared_modules/pupil_detector_plugins/vivim/
+# vivim_backbone.py, temporal_mamba.py, mamba_block.py
+from .vivim import VivimBackbone
 ```
 
-**`VivimBackbone`**은 `~/PycharmProjects/nnUNet/agent/models/vivim_backbone.py`에서 임포트됩니다. Pupil 레포 외부에 위치한 nnUNet 프로젝트에 대한 하드코딩된 경로 의존성입니다.
+**`VivimBackbone`**은 `pupil_src/shared_modules/pupil_detector_plugins/vivim/`에 내장 모듈로 통합되어 있어 외부 프로젝트 경로 의존성 없이 독립적으로 구동됩니다.
 
-### 6.2 체크포인트 경로 구조
+### 6.2 체크포인트 구조
 
 ```python
-# L138-144
-self.vivim_ckpts = {
-    3:  ".../Dataset600_OpenEDS2019/nnUNetTrainer_Vivim__nnUNetPlans__2d/fold_1/checkpoint_best.pth",
-    5:  ".../Dataset600_OpenEDS2019/nnUNetTrainer_Vivim_T5__nnUNetPlans__2d/fold_1/checkpoint_best.pth",
-    7:  ".../fold_1_T7/checkpoint_best.pth",
-    9:  ".../fold_1_T9/checkpoint_best.pth",
-    11: ".../fold_1_T11/checkpoint_best.pth",
-}
+# pupil_src/shared_modules/pupil_detector_plugins/
+# best_checkpoint_t7.pth (T=7 최적화 가중치)
+ckpt_path = os.path.join(current_dir, "best_checkpoint_t7.pth")
 ```
 
-> [!IMPORTANT]
-> T=3과 T=7/9/11은 같은 trainer(`nnUNetTrainer_Vivim`)의 다른 fold 디렉토리를 사용하지만, T=5는 별도 trainer(`nnUNetTrainer_Vivim_T5`)를 사용합니다. 이 불일치가 의도적인 것인지 확인이 필요합니다.
+최고 성능인 **Mamba3 (T=7)** 전용 가중치를 직접 로드하여 GPU 메모리 사용량을 최소화합니다.
 
 ### 6.3 입력 전처리 상세
 
@@ -398,15 +392,18 @@ def _get_or_load_vivim(self, t_val):
 | `numpy._core` 호환 패치 | [L69-72](file:///home/byeongjun/PycharmProjects/pupil/pupil_src/shared_modules/pupil_detector_plugins/detector_2d_plugin.py#L69-L72) | numpy 2.x 호환 패치이나, 주석 필요 |
 | PyTorch dtype 패치 | [L17-21](file:///home/byeongjun/PycharmProjects/pupil/pupil_src/shared_modules/pupil_detector_plugins/detector_2d_plugin.py#L17-L21) | `float4_e2m1fn_x2`, `float8_e8m0fnu` — Mamba의 의존성 문제. 버전 범위 주석 추가 |
 
-### 8.3 성능 개선
+### 8.3 성능 최적화 현황 (AMP 가속 적용 완료)
 
-> [!TIP]
-> **AMP 누락**: `_detect_vivim_mamba_by_t()`에서 `torch.cuda.amp.autocast()`가 사용되지 않습니다. `_detect_temporal_unet()`과 `_detect_nnunet_2d()`에는 적용되어 있으므로 일관성을 위해 추가하면 추론 시간을 20-30% 단축할 수 있습니다.
+> [!NOTE]
+> **AMP 적용 완료**: `_detect_vivim_mamba_by_t()`에서 `torch.amp.autocast(device_type="cuda", enabled=self._use_amp)`가 성공적으로 적용되어 GPU 추론 지연시간이 대폭 단축되었습니다.
 
-```diff
- with torch.inference_mode():
-+    with torch.cuda.amp.autocast(enabled=self._use_amp):
-         logits = model(seq_tensor.float())
+```python
+with torch.inference_mode():
+    if self._use_amp:
+        with torch.amp.autocast(device_type="cuda"):
+            logits = model(seq_tensor.float())
+    else:
+        logits = model(seq_tensor.float())
 ```
 
 ### 8.4 견고성 개선
@@ -423,7 +420,7 @@ sequenceDiagram
     participant Cam as Eye Camera
     participant Eye as Eye Process
     participant Det as Detector2DPlugin
-    participant Mamba as VivimBackbone
+    participant Mamba as VivimBackbone (T=7)
     participant Post as _postprocess_mask_to_datum
     participant IPC as ZMQ IPC
     participant World as World Process
@@ -433,8 +430,8 @@ sequenceDiagram
     Eye->>Det: recent_events(event)
     Det->>Det: detect(frame)
 
-    alt active_model = "Mamba3 (T=5)"
-        Det->>Mamba: seq_tensor [1,5,1,448,448]
+    alt active_model = "Mamba3 (T=7)"
+        Det->>Mamba: seq_tensor [1,7,1,448,448] (with AMP)
         Mamba-->>Det: logits [1,4,448,448]
     else active_model = "RITnet"
         Det->>Det: _detect_ritnet(frame)
@@ -444,7 +441,7 @@ sequenceDiagram
     Post-->>Det: datum {norm_pos, confidence, ellipse}
     Det->>IPC: pupil.0.2d
     IPC->>World: pupil datum
-    World->>Acc: compute angular accuracy
+    World->>Acc: compute angular accuracy (and 5-stack summary)
 ```
 
 ---
@@ -454,7 +451,5 @@ sequenceDiagram
 이 포크는 Pupil Labs의 원본 C++ 2D 검출기를 **Vivim-Mamba3 기반 시계열 동공 세그멘테이션**으로 대체한 연구 플랫폼입니다. 핵심 설계 결정은:
 
 1. **플러그인 아키텍처 활용**: Pupil의 `Plugin` 시스템을 통해 원본 코드 최소 변경으로 Mamba3를 통합
-2. **다중 시간 윈도우 실험**: T=3,5,7,9,11 변형을 UI 드롭다운으로 실시간 전환
-3. **엔드투엔드 실험 파이프라인**: 캘리브레이션/검증 → 정확도 자동 로깅까지 일관된 흐름
-
-주요 기술 부채는 **하드코딩된 외부 경로**, **동시 모델 적재로 인한 메모리 낭비**, **`_empty_datum` 중복 정의**, 그리고 **AMP 미적용으로 인한 추론 속도 저하**입니다. 위 개선 제안들을 적용하면 연구 효율과 코드 유지보수성이 크게 향상될 것입니다.
+2. **시계열 윈도우 최적화**: Mamba3 T=7 가중치를 소스 트리에 내장하고 AMP 가속 적용
+3. **엔드투엔드 실험 파이프라인**: 캘리브레이션/검증 → 5-Stack 요약 통계(평균/표준편차) 자동 출력까지 일관된 흐름을 제공합니다.

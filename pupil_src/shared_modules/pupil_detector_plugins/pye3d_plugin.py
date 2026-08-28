@@ -18,6 +18,7 @@ from version_utils import parse_version
 
 from . import color_scheme
 from .detector_base_plugin import PupilDetectorPlugin
+from .detector_2d_plugin import select_nir_torch_device
 from .visualizer_2d import draw_ellipse, draw_eyeball_outline, draw_pupil_outline
 from .visualizer_pye3d import Eye_Visualizer
 import numpy as np
@@ -92,9 +93,7 @@ class Pye3DPlugin(PupilDetectorPlugin):
         current_dir = os.path.dirname(os.path.abspath(__file__))
         pupil_src_dir = os.path.abspath(os.path.join(current_dir, "..", ".."))
         model_path = os.path.join(pupil_src_dir, "best_model.pkl")
-        device_str = "cuda" if torch.cuda.is_available() else "cpu"
-
-        self.device = torch.device(device_str)
+        self.device = select_nir_torch_device()
 
         # 3) 모델 로드
         #    (model_dict, get_predictions 등은 RITnet 예제에서 import 했다고 가정)

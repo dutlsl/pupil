@@ -47,6 +47,9 @@ def available_detector_plugins() -> T.List[T.Type[PupilDetectorPlugin]]:
         "no",
         "off",
     }
+    integrated_enabled = hybrid_enabled and os.getenv(
+        "PUPIL_HYBRID_INTEGRATED", "0"
+    ).strip().lower() not in {"", "0", "false", "no", "off"}
     if hybrid_enabled:
         from .detector_2d_hybrid_plugin import HybridDetector2DPlugin
 
@@ -57,14 +60,15 @@ def available_detector_plugins() -> T.List[T.Type[PupilDetectorPlugin]]:
         all_plugins = [Detector2DPlugin]
 
     try:
-        from .pye3d_plugin import Pye3DPlugin
+        if integrated_enabled:
+            from .hybrid_pye3d_plugin import HybridPye3DPlugin
+        else:
+            from .pye3d_plugin import Pye3DPlugin
     except ImportError:
         logger.warning("Refraction corrected 3D pupil detector not available!")
         logger.debug(traceback.format_exc())
     else:
         logger.debug("Using refraction corrected 3D pupil detector.")
-        all_plugins.append(Pye3DPlugin)
-
-
+        all_plugins.append(HybridPye3DPlugin if integrated_enabled else Pye3DPlugin)
 
     return all_plugins

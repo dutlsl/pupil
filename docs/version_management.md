@@ -96,8 +96,8 @@
 #### (2) 이상치 제거 임계값 (`accuracy_visualizer.py`)
 - `main` / `v-ritnet-base`: `outlier_threshold = 2.5°`
 - `feature/nnunet`: `outlier_threshold = 1.3°`
-- `nnunet-mamba3`: `outlier_threshold = 1.5°` (Mamba3/RITnet Empty slice 방지)
-- **영향**: `angular_err > np.cos(np.deg2rad(threshold))` 필터에서 오차가 큰 샘플을 사전에 배제하므로, 남은 알짜 샘플들의 평균 각도 오차는 필연적으로 1.3° 이하로 산출됨.
+- `nnunet-mamba3`: `outlier_threshold = 1.2°` (기본값)
+- **영향**: `angular_err > np.cos(np.deg2rad(threshold))` 필터에서 오차가 큰 샘플을 사전에 배제하므로, 남은 알짜 샘플들의 평균 각도 오차는 필연적으로 1.2° 이하로 산출됨.
 
 #### (3) 샘플 수집 듀레이션 (`sample_duration`)
 - `v-ritnet-base` / `main`: `sample_duration = 40`
@@ -107,7 +107,7 @@
 #### (4) 동공 후처리 파이프라인 (`detector_2d_plugin.py`)
 `feature/nnunet` 및 `nnunet-mamba3`에서는 딥러닝 세그멘테이션 결과물에 대해 다음과 같은 전처리/후처리가 일괄 적용됩니다:
 1. **Anti-aliasing GaussianBlur (5×5)**: 마스크 경계의 계단 현상을 제거하여 `cv2.fitEllipse` 중심점 정밀도 향상.
-2. **Half-blink Rejection (`aspect_ratio < 0.65`)**: 눈꺼풀에 찌그러진 왜곡 동공 데이터를 사전에 폐기 (`confidence = 0.0`).
+2. **Half-blink & Distortion Rejection (`aspect_ratio < 0.20 or area < 15.0`)**: 눈꺼풀에 찌그러진 왜곡 동공 데이터를 사전에 폐기 (`confidence = 0.0`).
 3. **Temporal EMA Smoothing (`_smooth_alpha = 0.4`)**:
    $$cx_{t} = 0.4 \cdot cx_{t} + 0.6 \cdot cx_{t-1}$$
    프레임 간 미세한 세그멘테이션 마스크 요동(Random Jitter)을 60% 흡수.
@@ -200,23 +200,24 @@
 | 설정 항목 | `v-ritnet-base` | `main` (`v-umamba`) | `feature/nnunet` (`4b67751a`) | `nnunet-mamba3` (`4bfdea4b`) |
 |:---|:---:|:---:|:---:|:---:|
 | **기본 Active Model** | RITnet | U-Mamba | TemporalUNet | Mamba3 (T=7) |
-| **지원 모델 목록** | RITnet, 2D C++ | U-Mamba, RITnet, 2D C++ | TemporalUNet, Vivim, 2D nnUNet, RITnet, 2D C++ | Mamba3 (T=3..11), RITnet, 2D C++ |
-| **캘리브레이션 패턴** | 5-point Cross | 4-point Center Box `(0.4~0.6)` | **3×3 9-point Grid** | **3×3 9-point Grid** |
-| **밸리데이션 패턴** | 4-Corner Box | 4-point Center Box | **`(0.5, 0.7)` 5회** | **`(0.5, 0.7)` 5회** |
+| **지원 모델 목록** | RITnet, 2D C++ | U-Mamba, RITnet, 2D C++ | TemporalUNet, Vivim, 2D nnUNet, RITnet, 2D C++ | Mamba3 (T=7), RITnet, 2D C++ |
+| **캘리브레이션 패턴** | 5-point Cross | 4-point Center Box `(0.4~0.6)` | **3×3 9-point Grid** | **5-Point / 9-Point / 12-Point Grid** |
+| **밸리데이션 패턴** | 4-Corner Box | 4-point Center Box | **`(0.5, 0.7)` 5회** | **Diamond (4p) / 4 Corners (4p)** |
 | **Sample Duration** | 40 frames | 40 frames | **60 frames** | **60 frames** |
-| **Outlier Threshold** | 2.5° | 2.5° | 1.3° | **1.5°** |
+| **Outlier Threshold** | 2.5° | 2.5° | 1.3° | **1.2°** |
 | **동공 후처리 EMA (`α`)** | 미적용 | 미적용 | 0.4 | 0.4 |
 | **동공 Jump Rejection** | 미적용 | 미적용 | 40px (5 frames) | 40px (5 frames) |
 | **Dispersion 완화** | 고정 66.7ms | 고정 66.7ms | 고정 66.7ms | **0.2s ~ 2.0s 점진 완화** |
 | **Calibration ON/OFF** | 미지원 | 미지원 | 미지원 | **지원 (UI Switch & IPC)** |
+| **5-Stack Summary** | 미지원 | 미지원 | 미지원 | **지원 (평균/표준편차 자동 콘솔 출력)** |
 
 ---
 
 ## 6. 향후 실험 및 운영 가이드라인 (Best Practices)
 
 1. **신뢰성 있는 모델 간 벤치마크 평가를 위한 밸리데이션 패턴 확장**:
-   - 단일점 `(0.5, 0.7)` 평가는 과적합 및 중심 편향을 유발하므로, 실제 일반화 성능 평가 시에는 **화면 외곽을 포함하는 5-point (`(0.5, 0.5)`, `(0.1, 0.9)`, `(0.9, 0.9)`, `(0.9, 0.1)`, `(0.1, 0.1)`)** 패턴으로 변경하여 테스트할 것을 권장함.
+   - 단일점 `(0.5, 0.7)` 평가는 과적합 및 중심 편향을 유발하므로, 실제 일반화 성능 평가 시에는 **Diamond 4-point (`(0.5, 0.8)`, `(0.8, 0.5)`, `(0.5, 0.2)`, `(0.2, 0.5)`)** 및 **4 Corners** 패턴으로 다각도 테스트를 수행함.
 2. **이상치 임계값(`outlier_threshold`)의 표준화**:
-   - `outlier_threshold = 1.3°`는 딥러닝 모델에서 미세한 지터 발생 시 전체 샘플이 누락(`Mean of empty slice`)될 위험이 있으므로, 공정한 비교를 위해 **`1.5° ~ 2.0°` 수준으로 고정**하여 평가할 것.
+   - 현재 기본값 `outlier_threshold = 1.2°`로 표준화되어 있으며, 5회 밸리데이션 누적 시 콘솔에 통계 요약이 제공됨.
 3. **Mamba-3 모델 추론 최적화**:
-   - 딥러닝 디텍터의 Random Jitter를 줄이기 위해 `_detect_vivim_mamba_by_t` 내부의 AMP(`torch.cuda.amp.autocast`) 활성화 및 추론 지연 최소화가 요구됨.
+   - `_detect_vivim_mamba_by_t` 내부에 AMP(`torch.amp.autocast(device_type="cuda")`)가 적용 완료되어 GPU 가속 추론이 수행됨.

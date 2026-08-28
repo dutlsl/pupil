@@ -22,6 +22,7 @@ from gaze_mapping.gazer_base import (
     Model,
     NotEnoughDataError,
 )
+from gaze_mapping.matching import HybridBinocularMatcher
 from methods import normalize
 
 from .calibrate_3d import calibrate_binocular, calibrate_monocular
@@ -379,6 +380,12 @@ class Gazer3D(GazerBase):
             initial_eye_translation1=self.eye1_hardcoded_translation,
         )
 
+    def init_matcher(self):
+        if HybridBinocularMatcher.integrated_mode_enabled():
+            self.matcher = HybridBinocularMatcher.from_environment()
+        else:
+            super().init_matcher()
+
     def fit_on_calib_data(self, calib_data):
         super().fit_on_calib_data(calib_data)
         self.left_model.binocular_model = self.binocular_model
@@ -449,12 +456,25 @@ class Gazer3D(GazerBase):
             if gaze_positions is ...:
                 continue  # Prediction failed and the reason was logged
 
+            if (
+                num_matched == 2
+                and isinstance(self.matcher, HybridBinocularMatcher)
+                and pupil_match[0]["id"] == 0
+            ):
+                # The hybrid matcher emits only for an Eye0 arrival and may
+                # intentionally reuse an older Eye1 snapshot. Preserve the
+                # fresh DVS/NIR Eye0 timestamp instead of reporting their
+                # average as the timestamp of this high-rate gaze sample.
+                gaze_timestamp = pupil_match[0]["timestamp"]
+            else:
+                gaze_timestamp = np.mean([p["timestamp"] for p in pupil_match])
+
             for gaze_pos in gaze_positions:
                 gaze_pos.update(
                     {
                         "topic": topic,
                         "confidence": np.mean([p["confidence"] for p in pupil_match]),
-                        "timestamp": np.mean([p["timestamp"] for p in pupil_match]),
+                        "timestamp": gaze_timestamp,
                         "base_data": pupil_match,
                     }
                 )

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import multiprocessing as mp
 import os
 import queue
@@ -14,6 +15,11 @@ from copy import deepcopy
 from pyglui import ui
 
 from .detector_2d_plugin import Detector2DPlugin
+from .hybrid_pye3d_fusion import (
+    FusionGeometryError,
+    Pye3DSnapshotStore,
+    fuse_dvs_pupil,
+)
 from .hybrid_runtime import DVSWorkerConfig, dvs_worker_process_main
 
 logger = logging.getLogger(__name__)
@@ -37,6 +43,23 @@ def _eye_uses_dvs(eye_id: int) -> bool:
             f"Invalid PUPIL_HYBRID_DVS_EYE_ID={value!r}; using eye 0"
         )
         return eye_id == 0
+
+
+def _env_nonnegative_float(name: str, default: float) -> float:
+    """Read a latency/configuration value without making the eye process fragile."""
+
+    raw_value = os.getenv(name)
+    if raw_value is None:
+        return default
+    try:
+        value = float(raw_value)
+    except ValueError:
+        logger.warning("Invalid %s=%r; using %s", name, raw_value, default)
+        return default
+    if not math.isfinite(value) or value < 0.0:
+        logger.warning("Invalid %s=%r; using %s", name, raw_value, default)
+        return default
+    return value
 
 
 class HybridDetector2DPlugin(Detector2DPlugin):
@@ -82,16 +105,51 @@ class HybridDetector2DPlugin(Detector2DPlugin):
         self._worker_stop = None
         self._result_queue = None
         self._dvs_enabled_for_eye = _eye_uses_dvs(self.g_pool.eye_id)
+        self._integrated_mode = self._dvs_enabled_for_eye and _env_bool(
+            "PUPIL_HYBRID_INTEGRATED", False
+        )
+        self._mp_context = mp.get_context("spawn")
+        self._pye3d_snapshot_store = None
+        self._nir_fallback_queue = None
         self._publisher_thread = None
         self._last_received_seq = 0
         self._fresh_received_interval = 0
         self._missing_sequence_interval = 0
+        self.snapshot_max_age_ms = _env_nonnegative_float(
+            "PUPIL_HYBRID_SNAPSHOT_MAX_AGE_MS", 250.0
+        )
+        self.dvs_fallback_ms = _env_nonnegative_float(
+            "PUPIL_HYBRID_DVS_FALLBACK_MS", 50.0
+        )
+        self.min_model_confidence = _env_nonnegative_float(
+            "PUPIL_HYBRID_PYE3D_MODEL_CONFIDENCE", 0.6
+        )
+
+        if self._integrated_mode:
+            # This numeric store is the only cross-process dependency between
+            # NIR/Pye3D and TDTracker.  It deliberately contains no frames,
+            # model objects, or queues that would couple the two inference loops.
+            self._pye3d_snapshot_store = Pye3DSnapshotStore.create(
+                self._mp_context
+            )
+            self._nir_fallback_queue = queue.Queue(maxsize=1)
+            self.g_pool.hybrid_pye3d_snapshot_store = self._pye3d_snapshot_store
+            # HybridPye3DPlugin submits fallback candidates here.  This plugin's
+            # broker thread is the *only* owner of the Eye0 final-3D PUB socket.
+            self.g_pool.hybrid_pye3d_broker = self
 
         if self._dvs_enabled_for_eye and _env_bool(
             "PUPIL_HYBRID_DVS_PROCESS", True
         ):
             self._start_worker()
-        if self._dvs_enabled_for_eye:
+        if self._integrated_mode:
+            self._publisher_thread = threading.Thread(
+                target=self._integrated_3d_broker_loop,
+                name="hybrid-eye0-3d-broker",
+                daemon=True,
+            )
+            self._publisher_thread.start()
+        elif self._dvs_enabled_for_eye:
             self._publisher_thread = threading.Thread(
                 target=self._parent_publish_loop,
                 name="hybrid-dvs-publisher",
@@ -106,10 +164,9 @@ class HybridDetector2DPlugin(Detector2DPlugin):
                 f"TDTracker checkpoint does not exist: {config.checkpoint_path}"
             )
             return
-        context = mp.get_context("spawn")
-        self._result_queue = context.Queue(maxsize=1)
-        self._worker_stop = context.Event()
-        self._worker = context.Process(
+        self._result_queue = self._mp_context.Queue(maxsize=1)
+        self._worker_stop = self._mp_context.Event()
+        self._worker = self._mp_context.Process(
             target=dvs_worker_process_main,
             args=(config.__dict__, self._result_queue, self._worker_stop),
             name="hybrid-dvs-worker",
@@ -118,8 +175,10 @@ class HybridDetector2DPlugin(Detector2DPlugin):
         self._worker.start()
 
     def _drain_worker_results(self):
+        """Drain the latest TDTracker result and return it only once per seq_id."""
+
         if self._result_queue is None:
-            return
+            return None
         newest = None
         while True:
             try:
@@ -153,6 +212,7 @@ class HybridDetector2DPlugin(Detector2DPlugin):
                     )
                 if newest is None or item["seq_id"] > newest["seq_id"]:
                     newest = item
+        fresh_result = None
         if newest is not None:
             newest["parent_receive_monotonic_ns"] = time.monotonic_ns()
             seq_id = int(newest["seq_id"])
@@ -163,8 +223,10 @@ class HybridDetector2DPlugin(Detector2DPlugin):
             if seq_id > self._last_received_seq:
                 self._fresh_received_interval += 1
                 self._last_received_seq = seq_id
+                fresh_result = newest
             with self._state_lock:
                 self._latest_dvs = newest
+        return fresh_result
 
     def _map_dvs(self, x, y):
         x = x * float(os.getenv("PUPIL_HYBRID_DVS_SCALE_X", "1.0"))
@@ -348,11 +410,189 @@ class HybridDetector2DPlugin(Detector2DPlugin):
                 metrics_stream.close()
             publisher.socket.close(linger=0)
 
+    def submit_nir_fallback(self, datum):
+        """Queue one Eye0 NIR/Pye3D fallback candidate for the 3D broker.
+
+        This method is called from the normal eye plugin loop.  The broker owns
+        the ZeroMQ socket on a different thread, therefore the hand-off is a
+        latest-only in-process queue instead of sharing a socket between
+        threads.  Keeping only the latest NIR candidate also prevents a slow
+        broker from accumulating frame-rate work while DVS is active.
+        """
+
+        if not self._integrated_mode or self._nir_fallback_queue is None:
+            return False
+
+        candidate = deepcopy(datum)
+        candidate.pop("_published_externally", None)
+        candidate.update(
+            {
+                "source": "nir_pye3d_fallback",
+                "source_2d": "nir_ritnet",
+                "hybrid_output_owner": "eye0_3d_broker",
+            }
+        )
+        try:
+            self._nir_fallback_queue.put_nowait(candidate)
+            return True
+        except queue.Full:
+            pass
+        try:
+            self._nir_fallback_queue.get_nowait()
+        except queue.Empty:
+            pass
+        try:
+            self._nir_fallback_queue.put_nowait(candidate)
+            return True
+        except queue.Full:
+            # A concurrent broker read may temporarily make the queue appear
+            # full. Dropping this NIR frame is safe; the next NIR frame is the
+            # preferred fallback candidate anyway.
+            return False
+
+    def _integrated_3d_broker_loop(self):
+        """Publish the one authoritative Eye0 3D stream for integrated mode.
+
+        NIR/Pye3D and TDTracker remain independent producers.  Their only
+        meeting point is the shared numeric Pye3D snapshot and this output
+        broker.  Consequently Pye3D fallback and DVS-fused results cannot race
+        on two separate PUB sockets or create duplicate Eye0 3D messages.
+        """
+
+        from zmq_tools import Msg_Streamer
+
+        publisher = Msg_Streamer(self.g_pool.zmq_ctx, self.g_pool.ipc_pub_url)
+        try:
+            while not self._stop_thread.is_set():
+                # Always process a completed event result before a pending NIR
+                # fallback. Once the fresh fused datum is marked, the fallback
+                # gate below sees DVS as active in the same broker iteration.
+                fresh_dvs = self._drain_worker_results()
+                if fresh_dvs is not None:
+                    self._publish_fused_dvs_result(publisher, fresh_dvs)
+                self._publish_pending_nir_fallback(publisher)
+                # TDTracker slices are nominally 1 ms. Event.wait keeps shutdown
+                # responsive without a busy spinning CPU core in the eye process.
+                self._stop_thread.wait(0.001)
+        except Exception:
+            logger.exception("Hybrid Eye0 3D broker stopped unexpectedly")
+        finally:
+            publisher.socket.close(linger=0)
+
+    def _publish_fused_dvs_result(self, publisher, dvs_result):
+        """Fuse exactly one fresh TDTracker completion into a Pye3D 3D datum."""
+
+        store = self._pye3d_snapshot_store
+        if store is None:
+            return False
+        try:
+            seq_id = int(dvs_result["seq_id"])
+            confidence = float(dvs_result["confidence"])
+        except (KeyError, TypeError, ValueError):
+            logger.warning("Ignoring malformed TDTracker completion: %r", dvs_result)
+            return False
+        if not math.isfinite(confidence) or confidence < self.confidence_threshold:
+            return False
+
+        now_ns = time.monotonic_ns()
+        snapshot = store.read(
+            now_monotonic_ns=now_ns,
+            max_age_ms=self.snapshot_max_age_ms,
+            min_model_confidence=self.min_model_confidence,
+        )
+        if snapshot is None:
+            return False
+
+        try:
+            mapped_x, mapped_y = self._map_dvs(dvs_result["x"], dvs_result["y"])
+            fused = fuse_dvs_pupil(
+                snapshot,
+                mapped_nir_norm_pos=(mapped_x, mapped_y),
+                dvs_confidence=confidence,
+                timestamp=self.g_pool.get_timestamp(),
+                eye_id=self.g_pool.eye_id,
+                seq_id=seq_id,
+                now_monotonic_ns=now_ns,
+                max_snapshot_age_ms=self.snapshot_max_age_ms,
+                min_model_confidence=self.min_model_confidence,
+            )
+        except (FusionGeometryError, KeyError, TypeError, ValueError):
+            logger.exception("Could not fuse fresh TDTracker result seq=%s", seq_id)
+            return False
+
+        if fused is None:
+            return False
+        # This atomic generation gate gives the fresh-only contract a second
+        # layer of protection if the worker ever delivers an old sequence after
+        # a restart/reordering event.  Activity is marked only for a datum that
+        # passed every fusion check, so invalid DVS data never blocks NIR fallback.
+        if not store.mark_dvs_fused_result(seq_id, monotonic_ns=now_ns):
+            return False
+
+        submit_ns = dvs_result.get("stack_submit_monotonic_ns")
+        ready_ns = dvs_result.get("cuda_ready_monotonic_ns")
+        receive_ns = dvs_result.get("parent_receive_monotonic_ns")
+        fused.update(
+            {
+                "dvs_hardware_timestamp_us": dvs_result.get(
+                    "dvs_hardware_timestamp_us"
+                ),
+                "stack_submit_monotonic_ns": submit_ns,
+                "cuda_ready_monotonic_ns": ready_ns,
+                "parent_receive_monotonic_ns": receive_ns,
+                "publish_monotonic_ns": now_ns,
+                "submit_to_ready_ms": (
+                    (ready_ns - submit_ns) / 1e6
+                    if submit_ns is not None and ready_ns is not None
+                    else None
+                ),
+                "submit_to_parent_ms": (
+                    (receive_ns - submit_ns) / 1e6
+                    if submit_ns is not None and receive_ns is not None
+                    else None
+                ),
+                "submit_to_publish_ms": (
+                    (now_ns - submit_ns) / 1e6 if submit_ns is not None else None
+                ),
+                "hybrid_output_owner": "eye0_3d_broker",
+            }
+        )
+        publisher.send(fused)
+        return True
+
+    def _publish_pending_nir_fallback(self, publisher):
+        """Emit only the newest NIR Pye3D fallback when fused DVS is stale."""
+
+        if self._nir_fallback_queue is None:
+            return False
+        newest = None
+        while True:
+            try:
+                newest = self._nir_fallback_queue.get_nowait()
+            except queue.Empty:
+                break
+        if newest is None:
+            return False
+
+        store = self._pye3d_snapshot_store
+        if store is not None and store.dvs_is_fresh(self.dvs_fallback_ms):
+            return False
+        newest["hybrid_dvs_active"] = False
+        publisher.send(newest)
+        return True
+
     def detect(self, frame, **kwargs):
         self._frame_size = (frame.width, frame.height)
         anchor = self._detect_ritnet(frame, **kwargs)
         with self._state_lock:
             self._anchor = anchor
+        if self._integrated_mode:
+            # Pye3D must model the eyeball from the independent NIR ellipse.
+            # Do not replace its center with an older/latest DVS point here.
+            # The final Eye0 3D output is instead owned by the broker above.
+            anchor["source"] = "nir_ritnet_anchor"
+            anchor["_published_externally"] = True
+            return anchor
         if not self._dvs_enabled_for_eye:
             anchor["method"] = self.pupil_detection_method
             return anchor
@@ -399,3 +639,11 @@ class HybridDetector2DPlugin(Detector2DPlugin):
         if self._result_queue is not None:
             self._result_queue.close()
             self._result_queue.join_thread()
+        if getattr(self.g_pool, "hybrid_pye3d_broker", None) is self:
+            self.g_pool.hybrid_pye3d_broker = None
+        if (
+            getattr(self.g_pool, "hybrid_pye3d_snapshot_store", None)
+            is self._pye3d_snapshot_store
+        ):
+            self.g_pool.hybrid_pye3d_snapshot_store = None
+        return 0

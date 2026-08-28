@@ -383,7 +383,17 @@ class CalibrationChoreographyPlugin(Plugin):
             gazer_params["validation_points_count"] = val_pts
             gazer_params["sample_duration"] = getattr(self, "sample_duration", 60)
 
-            self._start_plugin("Accuracy_Visualizer")
+            acc_vis_inst = next(
+                (
+                    p
+                    for p in getattr(self.g_pool, "plugins", [])
+                    if getattr(p, "class_name", p.__class__.__name__)
+                    == "Accuracy_Visualizer"
+                ),
+                None,
+            )
+            if acc_vis_inst is None:
+                self._start_plugin("Accuracy_Visualizer")
             self.notify_all(
                 ChoreographyNotification(
                     mode=ChoreographyMode.VALIDATION,

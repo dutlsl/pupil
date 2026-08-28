@@ -205,6 +205,37 @@ def test_5stack_demo():
     print("✅ Successfully verified interruption reset on calibration.stopped.")
 
     print("\n================================================================================")
+    print("🧪 TEST 5: Persistent Option State Across Plugin Re-instantiations")
+    print("================================================================================")
+    # Start with default: False
+    fresh_gpool = DummyGPool()
+    acc_inst1 = Accuracy_Visualizer(fresh_gpool)
+    assert acc_inst1.enable_5stack_summary is False, "Initial default must be False"
+    print("✅ Default initial state is False.")
+
+    # User toggles switch ON in UI
+    acc_inst1.enable_5stack_summary = True
+    assert fresh_gpool.enable_5stack_summary is True, "g_pool must reflect toggled state"
+    print("✅ User toggled switch to True -> stored in g_pool.")
+
+    # Simulate start_plugin("Accuracy_Visualizer") recreating instance with empty args
+    acc_inst2 = Accuracy_Visualizer(fresh_gpool)
+    assert acc_inst2.enable_5stack_summary is True, "Re-created instance must preserve user's True toggle!"
+    print("✅ Re-instantiated Accuracy_Visualizer preserves enable_5stack_summary=True!")
+
+    # Verify get_init_dict preserves the setting
+    init_dict = acc_inst2.get_init_dict()
+    assert init_dict.get("enable_5stack_summary") is True
+    print("✅ get_init_dict correctly includes enable_5stack_summary=True.")
+
+    # User toggles switch OFF in UI
+    acc_inst2.enable_5stack_summary = False
+    assert fresh_gpool.enable_5stack_summary is False
+    acc_inst3 = Accuracy_Visualizer(fresh_gpool)
+    assert acc_inst3.enable_5stack_summary is False
+    print("✅ User toggled switch to False -> preserved across re-instantiations.")
+
+    print("\n================================================================================")
     print("🎉 ALL 5-STACK VALIDATION DEMO TESTS PASSED SUCCESSFULLY!")
     print("================================================================================")
 

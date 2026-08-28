@@ -63,10 +63,10 @@ def run_harness():
     print("   ✓ Verified model 'RITnet' is loaded and ready.")
 
     assert hasattr(plugin, "vivim_models") and plugin.vivim_models is not None, "❌ vivim_models dict not found!"
-    assert 7 in plugin.vivim_models, "❌ Mamba3 T=7 failed to load / is None!"
-    print("   ✓ Verified model 'Mamba3 (T=7)' is loaded and ready.")
+    assert 3 in plugin.vivim_models, "❌ Mamba3 T=3 failed to load / is None!"
+    print("   ✓ Verified model 'Mamba3 (T=3)' is loaded and ready.")
 
-    print("✅ Plugin & Models (Mamba3 T=7, 2D C++, RITnet) Loaded Successfully.")
+    print("✅ Plugin & Models (Mamba3 T=3, 2D C++, RITnet) Loaded Successfully.")
 
     resolutions = [
         ("Pupil Core Eye Camera (192x192)", 192, 192),
@@ -74,7 +74,7 @@ def run_harness():
         ("OpenEDS Dataset Native (400x640)", 400, 640),
     ]
 
-    models = ["Mamba3 (T=7)", "2D C++", "RITnet"]
+    models = ["Mamba3 (T=3)", "2D C++", "RITnet"]
 
     print("\n[2/3] Executing Dummy USB Video Stream & Streaming Inference Tests...")
     for res_name, h, w in resolutions:
@@ -118,6 +118,8 @@ def run_harness():
 
             avg_latency = np.mean(latencies[1:]) if len(latencies) > 1 else latencies[0]
             print(f"   ✓ Average Streaming Latency (FPS): {avg_latency:.2f} ms ({1000.0/max(avg_latency, 1e-3):.1f} FPS)")
+            if model_name.startswith("Mamba3 (T="):
+                print("   (async worker: latency above = event-loop dispatch only; GPU inference runs in background thread)")
 
     print("\n[3/3] Integrity Verification Completed.")
     print("=" * 75)

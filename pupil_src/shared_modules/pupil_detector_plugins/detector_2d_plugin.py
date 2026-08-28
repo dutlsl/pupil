@@ -10,8 +10,11 @@ import collections
 import logging
 import numpy as np
 import os
+import queue
 import sys
+import threading
 import time
+import types
 import cv2
 import torch
 # Monkeypatch missing low-precision float types in PyTorch <= 2.6.0
@@ -79,8 +82,55 @@ COLOR_MAX = 255
 COLOR_CAP = 256
 CLIP_LIMIT = 1.5
 TILE_GRID_SIZE = 8
+# Temporal context size of the active Mamba3 variant. The Vivim weights are
+# T-agnostic (Mamba3 selective scan), so the same checkpoint serves any T;
+# T=3 keeps the per-frame inference cost low for the 120 Hz eye loop.
+MAMBA3_T = 3
+MAMBA3_LABEL = f"Mamba3 (T={MAMBA3_T})"
 
 logger = logging.getLogger(__name__)
+
+
+def select_nir_torch_device():
+    """Select the NIR inference GPU, preserving normal single-GPU behavior.
+
+    ``main_int.py`` sets ``PUPIL_HYBRID_NIR_GPU_ID`` so NIR Eye0/Eye1 work can
+    be separated from the TDTracker GPU.  The normal launcher leaves that
+    variable unset and therefore keeps the historical CUDA:0 behavior.
+    """
+
+    if not torch.cuda.is_available():
+        return torch.device("cpu")
+
+    raw_index = os.getenv("PUPIL_HYBRID_NIR_GPU_ID")
+    if raw_index is None:
+        device_index = 0
+    else:
+        try:
+            device_index = int(raw_index)
+        except ValueError as error:
+            raise RuntimeError(
+                "PUPIL_HYBRID_NIR_GPU_ID must be a non-negative CUDA device "
+                f"index, got {raw_index!r}."
+            ) from error
+        if device_index < 0:
+            raise RuntimeError(
+                "PUPIL_HYBRID_NIR_GPU_ID must be a non-negative CUDA device "
+                f"index, got {raw_index!r}."
+            )
+
+    device_count = torch.cuda.device_count()
+    if device_index >= device_count:
+        raise RuntimeError(
+            "PUPIL_HYBRID_NIR_GPU_ID="
+            f"{device_index} requested, but only {device_count} CUDA device(s) "
+            "are visible to this process."
+        )
+    device = torch.device(f"cuda:{device_index}")
+    # AMP calls in the RITnet path use the current CUDA device. Explicitly set
+    # it so tensors and autocast never accidentally split across GPU 0/GPU N.
+    torch.cuda.set_device(device)
+    return device
 
 
 class Detector2DPlugin(PupilDetectorPlugin):
@@ -105,7 +155,7 @@ class Detector2DPlugin(PupilDetectorPlugin):
         g_pool=None,
         properties=None,
         detector_2d: Detector2D = None,
-        active_model="Mamba3 (T=7)",
+        active_model=MAMBA3_LABEL,
         flip_vertically: bool = False,
         flip_horizontally: bool = False,
         enable_calibration: bool = True,
@@ -114,10 +164,17 @@ class Detector2DPlugin(PupilDetectorPlugin):
         super().__init__(g_pool=g_pool)
         self.detector_2d = detector_2d or Detector2D(properties or {})
 
-        device_str = "cuda" if torch.cuda.is_available() else "cpu"
-        self.device = torch.device(device_str)
+        self.device = select_nir_torch_device()
 
         # UI Control States
+        # Legacy sessions may persist other Mamba3 variants (e.g. T=7); the
+        # plugin now only ships T=3, so normalize any Mamba3 value to it.
+        if (
+            isinstance(active_model, str)
+            and active_model.startswith("Mamba3 (T=")
+            and active_model != MAMBA3_LABEL
+        ):
+            active_model = MAMBA3_LABEL
         self.active_model = active_model
         self.flip_vertically = flip_vertically
         self.flip_horizontally = flip_horizontally
@@ -132,11 +189,31 @@ class Detector2DPlugin(PupilDetectorPlugin):
         self._smooth_alpha = 0.4
         self._consecutive_jumps = 0
 
-        # Load Models (Mamba3 T=7, RITnet as fallback)
+        # Load Models (Mamba3 T=3, RITnet as fallback)
         self.vivim_models = {}
-        self._vivim_queues = {7: collections.deque(maxlen=7)}
+        self._vivim_queues = {MAMBA3_T: collections.deque(maxlen=MAMBA3_T)}
         self._init_nnunet_models()
         self._init_ritnet_model()
+
+        # Async Mamba3 inference worker. Mamba3 inference is moved off the
+        # eye event loop so its (GPU-bound, multi-frame) latency no longer
+        # stalls frame capture/detection. detect() dispatches the frame to
+        # this worker and returns the newest completed result, which still
+        # carries its original frame timestamp.
+        self._postprocess_lock = threading.Lock()
+        self._mamba3_queue = queue.Queue(maxsize=8)
+        self._mamba3_results = {}
+        self._mamba3_results_lock = threading.Lock()
+        self._mamba3_last_fetched = None
+        self._mamba3_worker = None
+        if self.vivim_models:
+            self._mamba3_worker = threading.Thread(
+                target=self._mamba3_worker_loop,
+                name=f"mamba3-worker-eye{getattr(g_pool, 'eye_id', -1)}",
+                daemon=True,
+            )
+            self._mamba3_worker.start()
+            logger.info(f"Mamba3 (T={MAMBA3_T}) async inference worker started.")
 
     @property
     def enable_calibration(self) -> bool:
@@ -157,15 +234,22 @@ class Detector2DPlugin(PupilDetectorPlugin):
 
     def _init_nnunet_models(self):
         try:
-            logger.info("Initializing Vivim Mamba3 T=7 model...")
+            logger.info(f"Initializing Vivim Mamba3 T={MAMBA3_T} model...")
             current_dir = os.path.dirname(os.path.abspath(__file__))
             pupil_src_dir = os.path.abspath(os.path.join(current_dir, "..", ".."))
 
+            # T=3 model = base Vivim trainer fold (temporal_window=3 default).
             candidate_ckpts = [
-                os.path.join(current_dir, "best_checkpoint_t7.pth"),
-                os.path.join(pupil_src_dir, "best_checkpoint_t7.pth"),
-                os.path.join(current_dir, "best_checkpoint.pth"),
-                os.path.join(pupil_src_dir, "best_checkpoint.pth"),
+                os.path.join(current_dir, f"best_checkpoint_t{MAMBA3_T}.pth"),
+                os.path.join(pupil_src_dir, f"best_checkpoint_t{MAMBA3_T}.pth"),
+                os.path.join(
+                    NNUNET_DIR,
+                    "nnUNet_results",
+                    "Dataset600_OpenEDS2019",
+                    "nnUNetTrainer_Vivim__nnUNetPlans__2d",
+                    "fold_1",
+                    "checkpoint_best.pth",
+                ),
             ]
 
             ckpt_path = None
@@ -200,10 +284,10 @@ class Detector2DPlugin(PupilDetectorPlugin):
                         new_state_dict[k] = v
                 model.load_state_dict(new_state_dict, strict=False)
                 model.eval()
-                self.vivim_models[7] = model
-                logger.info(f"✅ Vivim Mamba3 T=7 model initialized successfully from {ckpt_path}")
+                self.vivim_models[MAMBA3_T] = model
+                logger.info(f"✅ Vivim Mamba3 T={MAMBA3_T} model initialized successfully from {ckpt_path}")
             else:
-                logger.warning("Vivim Mamba3 T=7 checkpoint not found.")
+                logger.warning(f"Vivim Mamba3 T={MAMBA3_T} checkpoint not found.")
         except Exception as e:
             logger.error(f"Failed to initialize Vivim Mamba3 model: {e}")
 
@@ -245,12 +329,12 @@ class Detector2DPlugin(PupilDetectorPlugin):
         return init_dict
 
     def detect(self, frame, **kwargs):
-        active = getattr(self, "active_model", "Mamba3 (T=5)")
+        active = getattr(self, "active_model", MAMBA3_LABEL)
         if active.startswith("Mamba3 (T="):
             try:
                 t_val = int(active.split("T=")[1].replace(")", ""))
             except Exception:
-                t_val = 5
+                t_val = MAMBA3_T
             model = self.vivim_models.get(t_val)
             if model is None:
                 if not getattr(self, f"_logged_missing_mamba3_t{t_val}", False):
@@ -258,7 +342,39 @@ class Detector2DPlugin(PupilDetectorPlugin):
                     setattr(self, f"_logged_missing_mamba3_t{t_val}", True)
                 return self._empty_datum(frame)
             setattr(self, f"_logged_missing_mamba3_t{t_val}", False)
-            return self._detect_vivim_mamba_by_t(frame, model, t_val, **kwargs)
+            if self._mamba3_worker is None:
+                return self._empty_datum(frame)
+
+            gray = frame.gray
+            if gray is None:
+                return self._empty_datum(frame)
+
+            # Dispatch to the async worker. Copy the pixels: the capture layer
+            # may reuse or replace the underlying buffer between frames.
+            item = (
+                np.array(gray, dtype=np.uint8, copy=True),
+                frame.timestamp,
+                int(frame.width),
+                int(frame.height),
+            )
+            if self._mamba3_queue.full():
+                # Drop the oldest pending frame so the freshest one is processed.
+                try:
+                    self._mamba3_queue.get_nowait()
+                except queue.Empty:
+                    pass
+                if not getattr(self, "_logged_mamba3_queue_drop", False):
+                    logger.warning(
+                        f"Mamba3 (T={MAMBA3_T}) inference queue saturated; "
+                        "dropping oldest pending frame to stay fresh."
+                    )
+                    self._logged_mamba3_queue_drop = True
+            self._mamba3_queue.put_nowait(item)
+
+            datum = self._fetch_latest_mamba3_result()
+            if datum is None:
+                return self._empty_datum(frame)
+            return datum
 
         elif active == "RITnet":
             if self.ritnet_model is None:
@@ -380,8 +496,63 @@ class Detector2DPlugin(PupilDetectorPlugin):
 
         return self._postprocess_mask_to_datum(pred_mask, frame, orig_h, orig_w, flip_v, flip_h)
 
-    def _detect_vivim_mamba_by_t(self, frame, model, t_val, **kwargs):
-        gray = frame.gray
+    def _mamba3_worker_loop(self):
+        """Dedicated inference thread: preproc -> T-window stack -> model ->
+        postproc. Owns the temporal queue and the EMA smoothing state for the
+        Mamba3 path so the eye event loop never blocks on it."""
+        self._mamba3_warmup()
+        while True:
+            item = self._mamba3_queue.get()
+            if item is None:
+                break
+            gray, timestamp, width, height = item
+            try:
+                datum = self._infer_mamba3(gray, timestamp, width, height)
+            except Exception as e:
+                logger.error(f"Mamba3 worker inference failed: {e}")
+                continue
+            with self._mamba3_results_lock:
+                self._mamba3_results[timestamp] = datum
+                while len(self._mamba3_results) > 16:
+                    oldest_key = next(iter(self._mamba3_results))
+                    del self._mamba3_results[oldest_key]
+
+    def _mamba3_warmup(self):
+        """Run one dummy forward pass on this thread so CUDA context init and
+        Mamba3 kernel (JIT) warmup happen at startup instead of stalling the
+        first real frame (or racing interpreter shutdown on a slow first call)."""
+        model = self.vivim_models.get(MAMBA3_T)
+        if model is None:
+            return
+        try:
+            with torch.inference_mode():
+                dummy = torch.zeros(1, MAMBA3_T, 1, 448, 448, device=self.device)
+                model(dummy)
+            if self.device.type == "cuda":
+                torch.cuda.synchronize()
+            logger.info("Mamba3 worker warmup complete.")
+        except Exception as e:
+            logger.error(f"Mamba3 worker warmup failed: {e}")
+
+    def _fetch_latest_mamba3_result(self):
+        """Return the newest completed Mamba3 datum (original frame timestamp
+        intact), or None before the first result is ready. A datum that was
+        already returned for a previous frame is flagged so the eye process
+        does not publish it twice."""
+        with self._mamba3_results_lock:
+            if not self._mamba3_results:
+                return None
+            latest_key = next(reversed(self._mamba3_results))
+            datum = self._mamba3_results[latest_key]
+        if datum is self._mamba3_last_fetched:
+            datum["_published_externally"] = True
+        else:
+            self._mamba3_last_fetched = datum
+        return datum
+
+    def _infer_mamba3(self, gray, timestamp, width, height):
+        frame = types.SimpleNamespace(timestamp=timestamp, width=width, height=height)
+        model = self.vivim_models.get(MAMBA3_T)
         if gray is None or model is None:
             return self._empty_datum(frame)
 
@@ -406,12 +577,12 @@ class Detector2DPlugin(PupilDetectorPlugin):
         canvas[24:424, 24:424] = img_norm
         t_tensor = torch.from_numpy(canvas).unsqueeze(0).to(self.device)  # [1, 448, 448]
 
-        queue = self._vivim_queues[t_val]
-        queue.append(t_tensor)
-        while len(queue) < t_val:
-            queue.append(t_tensor)
+        seq_queue = self._vivim_queues[MAMBA3_T]
+        seq_queue.append(t_tensor)
+        while len(seq_queue) < MAMBA3_T:
+            seq_queue.append(t_tensor)
 
-        seq_list = list(queue)
+        seq_list = list(seq_queue)
         seq_tensor = torch.stack(seq_list, dim=1).unsqueeze(2)  # [1, T, 1, 448, 448]
 
         with torch.inference_mode():
@@ -435,6 +606,12 @@ class Detector2DPlugin(PupilDetectorPlugin):
         )
 
     def _postprocess_mask_to_datum(self, pred_mask, frame, orig_h, orig_w, flip_v, flip_h):
+        # Shared EMA/jump state is mutated from the Mamba3 worker thread and
+        # the main thread (RITnet path); serialize the whole postprocess.
+        with self._postprocess_lock:
+            return self._postprocess_mask_to_datum_locked(pred_mask, frame, orig_h, orig_w, flip_v, flip_h)
+
+    def _postprocess_mask_to_datum_locked(self, pred_mask, frame, orig_h, orig_w, flip_v, flip_h):
         pupil_mask = np.zeros_like(pred_mask, dtype=np.uint8)
         pupil_mask[pred_mask == PUPIL_CLASS_ID] = 255
 
@@ -592,6 +769,24 @@ class Detector2DPlugin(PupilDetectorPlugin):
         }
         return datum
 
+    def cleanup(self):
+        if self._mamba3_worker is not None and self._mamba3_worker.is_alive():
+            # Drain pending frames, then send the stop sentinel. The worker
+            # finishes its in-flight inference before exiting; wait long
+            # enough for the (possibly JIT-compiling) first inference so the
+            # thread is fully dead before interpreter shutdown.
+            try:
+                while self._mamba3_queue.full():
+                    self._mamba3_queue.get_nowait()
+                self._mamba3_queue.put_nowait(None)
+            except queue.Empty:
+                pass
+            self._mamba3_worker.join(timeout=15.0)
+            if self._mamba3_worker.is_alive():
+                logger.warning("Mamba3 worker did not stop within timeout.")
+        self._mamba3_worker = None
+        super().cleanup()
+
     def init_ui(self):
         super().init_ui()
         self.menu.label = self.pretty_class_name
@@ -605,7 +800,7 @@ class Detector2DPlugin(PupilDetectorPlugin):
                 "active_model",
                 self,
                 label="Active Model",
-                selection=["Mamba3 (T=7)", "2D C++", "RITnet"],
+                selection=[MAMBA3_LABEL, "2D C++", "RITnet"],
             )
         )
         self.menu.append(ui.Switch("enable_calibration", self, label="Enable Calibration Mapping"))
